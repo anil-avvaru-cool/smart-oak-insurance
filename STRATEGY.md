@@ -439,7 +439,7 @@ smart-oak-insurance/
 │       ├── staging.yaml
 │       └── production.yaml
 │
-├── notebooks/                           ← exploration only, never production
+├── notebooks/                           ← Optional exploration only, never production
 │   ├── 01_data_exploration.ipynb
 │   ├── 02_feature_analysis.ipynb
 │   └── 03_model_prototyping.ipynb
@@ -450,7 +450,7 @@ smart-oak-insurance/
 └── .github/
     └── workflows/
         ├── ci.yml                       ← tests on PR
-        └── deploy.yml                   ← deploy to AWS on merge to main
+        └── deploy.yml                   ← deploy to AWS on demand
 ```
 
 ---
