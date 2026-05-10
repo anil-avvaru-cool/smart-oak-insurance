@@ -13,6 +13,11 @@ Synthetic insurance risk-and-fraud platform for underwriting and claims modeling
    ```bash
    uv sync
    ```
+3. Configure environment variables:
+   ```bash
+   cp example.env .env
+   # Edit .env with your configuration
+   ```
 
 
 ## Generate synthetic data

@@ -133,6 +133,7 @@ def generate_claims(quotes_df: pd.DataFrame, seed: int = RANDOM_SEED + 1) -> pd.
             "risk_score_at_issuance": quote["risk_score_at_issuance"],
             "policy_tier_at_issuance": quote["policy_tier_at_issuance"],
             "is_fraud": is_fraud,
+            "ip_geolocation_delta_km": float(np.clip(rng.normal(archetype.ip_geolocation_delta_mean, 5.0), 0.0, 100.0)),
         }
         records.append(claim_payload)
 

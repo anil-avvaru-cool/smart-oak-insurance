@@ -1,12 +1,22 @@
 import argparse
+import os
+
+from dotenv import load_dotenv
 
 from data.generator import generate_data
+from data.graph_builder import build_graph_from_claims
+from data.graph_features import compute_graph_features
 from data.validator import validate_data
+from data.config import CLAIMS_OUTPUT
+
+load_dotenv()
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Smart Oak Insurance data tools")
     parser.add_argument("--generate-data", action="store_true", help="Generate synthetic quote and claim datasets")
+    parser.add_argument("--build-graph", action="store_true", help="Build graph from claims data in Neo4j")
+    parser.add_argument("--compute-graph-features", action="store_true", help="Compute graph features and update claims data")
     parser.add_argument("--validate-data", action="store_true", help="Validate generated datasets")
     return parser
 
@@ -18,6 +28,23 @@ def main() -> None:
     if args.generate_data:
         quotes_df, claims_df = generate_data()
         print(f"Generated {len(quotes_df)} quotes and {len(claims_df)} claims")
+        return
+
+    if args.build_graph:
+        build_graph_from_claims(CLAIMS_OUTPUT, os.environ["NEO4J_URI"], os.environ["NEO4J_USER"], os.environ["NEO4J_PASSWORD"])
+        print("Graph built successfully")
+        return
+
+    if args.compute_graph_features:
+        graph_features_df = compute_graph_features(CLAIMS_OUTPUT, os.environ["NEO4J_URI"], os.environ["NEO4J_USER"], os.environ["NEO4J_PASSWORD"])
+        
+        # Merge with claims and update parquet
+        import pandas as pd
+        claims_df = pd.read_parquet(CLAIMS_OUTPUT)
+        claims_df = claims_df.drop(columns=['graph_hop_distance', 'attorney_centrality_score', 'shared_attribute_count'], errors='ignore')
+        claims_df = claims_df.merge(graph_features_df, on='claim_id', how='left')
+        claims_df.to_parquet(CLAIMS_OUTPUT, index=False)
+        print("Graph features computed and updated")
         return
 
     if args.validate_data:

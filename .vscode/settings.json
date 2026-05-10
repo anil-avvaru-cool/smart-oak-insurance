@@ -11,6 +11,10 @@
         "/^wsl bash -lc 'cd /mnt/c/Users/anila/src/smart-oak-insurance && uv --version && uv install && uv run -m main --generate-data && uv run -m main --validate-data && uv run -m pytest tests/unit/ -q'$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^uv run python main\\.py --generate-data$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }
