@@ -32,6 +32,7 @@ MANIFEST
 *.manifest
 *.spec
 
+
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
@@ -151,6 +152,7 @@ activemq-data/
 .env
 .envrc
 .venv
+.wslvenv
 env/
 venv/
 ENV/
@@ -216,3 +218,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+data/raw/
+data/processed/

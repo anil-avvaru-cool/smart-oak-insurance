@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "smart-oak-insurance"
 version = "0.1.0"
@@ -6,5 +10,22 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "pydantic>=2.13.4",
-    "pytest>=9.0.3",
+    "numpy>=2.0",
+    "pandas>=2.1.0",
+    "pyarrow>=12.0.0",
+    "faker>=23.0.0",
+    "redis>=5.0",
+    "neo4j>=6.0.0",
+    "python-dotenv>=1.0.0",
 ]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0.3",
+    "black>=24.0.0",
+    "ruff>=0.0.300",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["features*", "data*"]
