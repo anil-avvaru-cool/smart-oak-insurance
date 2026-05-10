@@ -31,19 +31,17 @@ Generated outputs are written to `data/raw/quotes.parquet` and `data/raw/claims.
 
 ## Docker
 
-Build the container and start services:
-```powershell
-docker compose up --build
-```
-
-Run the generator inside Docker:
-```powershell
+Docker commands:
+```bash
+docker compose up -d --build
+#Run the generator inside Docker:
 docker compose run --rm app python main.py --generate-data
-```
-
-Run validation inside Docker:
-```powershell
+#Run validation inside Docker:
 docker compose run --rm app python main.py --validate-data
+
+# Maintenance
+docker compose down
+docker compose down --rmi all -v
 ```
 
 ## Project layout

@@ -6,3 +6,5 @@ data/processed
 *.pyc
 .env
 .venv/
+*.md
+*.parquet
