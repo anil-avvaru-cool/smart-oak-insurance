@@ -41,11 +41,16 @@ Docker commands:
 docker compose up -d --build
 #Run the generator inside Docker:
 docker compose run --rm app python main.py --generate-data
+docker compose up -d neo4j redis
+docker compose run --rm app python main.py --build-graph --validate-data
+docker compose run --rm app python main.py --compute-graph-features --validate-data
 #Run validation inside Docker:
 docker compose run --rm app python main.py --validate-data
 
 # Maintenance
+docker compose logs neo4j
 docker compose down
+docker compose down -v
 docker compose down --rmi all -v
 ```
 

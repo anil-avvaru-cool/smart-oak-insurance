@@ -33,7 +33,8 @@ def main() -> None:
     if args.build_graph:
         build_graph_from_claims(CLAIMS_OUTPUT, os.environ["NEO4J_URI"], os.environ["NEO4J_USER"], os.environ["NEO4J_PASSWORD"])
         print("Graph built successfully")
-        return
+        if not args.validate_data:
+            return
 
     if args.compute_graph_features:
         graph_features_df = compute_graph_features(CLAIMS_OUTPUT, os.environ["NEO4J_URI"], os.environ["NEO4J_USER"], os.environ["NEO4J_PASSWORD"])
@@ -45,7 +46,8 @@ def main() -> None:
         claims_df = claims_df.merge(graph_features_df, on='claim_id', how='left')
         claims_df.to_parquet(CLAIMS_OUTPUT, index=False)
         print("Graph features computed and updated")
-        return
+        if not args.validate_data:
+            return
 
     if args.validate_data:
         validate_data()
