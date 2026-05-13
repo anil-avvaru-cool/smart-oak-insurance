@@ -48,6 +48,16 @@ docker compose run --rm app python main.py --compute-graph-features --validate-d
 docker compose run --rm app python main.py --validate-data
 
 # Maintenance
+# 1. Export variables to your current host terminal(only once)
+export $(cat .env | xargs)
+
+# 2. Run your original command (it will now find $NEO4J_PASSWORD)
+docker compose exec neo4j cypher-shell -u neo4j -p "$NEO4J_PASSWORD" "MATCH (n) RETURN count(n);"
+docker compose exec neo4j cypher-shell -u neo4j -p "$NEO4J_PASSWORD" \
+"MATCH (n) 
+ RETURN n 
+ LIMIT 10;" > neo4jQueryResult.txt
+
 docker compose logs neo4j
 docker compose down
 docker compose down -v
