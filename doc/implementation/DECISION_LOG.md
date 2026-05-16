@@ -177,3 +177,72 @@ This is the architectural "shared data spine" concept from `STRATEGY.md` — ris
 **Dependency created:** Quotes must be scored by the risk model before claims can be generated. In week 1, stub with a rule-based score if the hurdle model is not yet trained. Replace with real model output in week 2.
 
 **Trade-off accepted:** Tight coupling between underwriting and claims pipelines via the feature store. Accepted — this coupling is the intended architecture, not a side effect.
+
+
+---
+
+**T-01 — Amend DEC-003 applies-to**
+
+```markdown
+# BEFORE
+**Applies to:** `feature_definitions.py` — `build_telematics_features()`, both platforms.
+
+# AFTER
+**Applies to:** `entity_vehicle.py` — OBD-II device → VIN linkage and enrollment status resolution.
+`feature_definitions.py` — `build_telematics_features()`, both platforms.
+```
+
+---
+
+**T-02 — Amend DEC-004 rationale**
+
+```markdown
+# BEFORE
+**Decision:** `features/feature_definitions.py` is built before archetypes. Archetypes import
+feature names from `feature_definitions.py`. `feature_definitions.py` has no imports from
+archetypes or generator.
+
+# AFTER
+**Decision:** `features/feature_definitions.py` is built before archetypes. Archetypes import
+feature names from `feature_definitions.py`. `feature_definitions.py` has no imports from
+archetypes, generator, or `entity_*.py` modules. Entity resolution outputs are passed as
+arguments to feature computation functions — not imported as modules. This preserves
+Layer 0 independence.
+```
+
+---
+
+**T-03 — Add DEC-011**
+
+```markdown
+## DEC-011 — Entity resolution as independent pre-graph layer
+
+**Date:** 2026-Q2
+**Decision:** Vehicle, Person, Address, and Phone are resolved as independent entities
+in `entities/` before `graph_builder.py` runs. `graph_builder.py` loads resolved entities
+as nodes and edges only — it does not compute features.
+
+**Rationale:**
+Vehicle base attributes (VIN decode, MSRP, ADAS efficacy) have no graph dependency.
+Placing their computation in `graph_builder.py` created a false dependency: vehicle
+features could not be computed until the graph was built, even though the graph
+contributes nothing to those features. Additionally, address and phone normalization
+must happen before graph edges are created — a `shares_address` edge between two
+unnormalized strings is unreliable and degrades Louvain community detection silently.
+
+**Alternative considered:** Compute vehicle and address features inside `graph_builder.py`
+as it loads data. Rejected — conflates entity persistence (loading nodes/edges) with
+feature engineering, and creates an unnecessary graph build dependency for non-graph
+features.
+
+**Trade-off accepted:** Adds an explicit entity resolution step to the build order and
+a new `entities/` directory to the repo. Accepted — the separation prevents a class of
+silent failures where a graph build error takes down base feature computation, breaking
+the tabular-only fallback scoring policy defined in `Fraud_Detection_Architecture.md`.
+
+**Applies to:** `entities/` layer (new), `graph_builder.py` (scope reduced to node/edge
+loading only), `offline_pipeline.py` (reads from `data/entities/` not raw generator
+output directly).
+```
+
+---

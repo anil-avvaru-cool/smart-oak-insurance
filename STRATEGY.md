@@ -14,7 +14,7 @@
 
 ## Platform Narrative
 
-Two distinct lifecycles. One shared data spine.
+Three distinct layers. One shared data spine.
 
 ```
 UNDERWRITING PLATFORM                    CLAIMS PLATFORM
@@ -36,9 +36,21 @@ Customer requests quote                  Accident happens
           └──────────── shared feature store ────────────┘
                   risk_score_at_issuance flows into
                   fraud scoring as a feature input
+
+          └────────── shared entity resolution ──────────┘
+                  Vehicle, Person, Address, Policy
+                  resolved once, consumed by both platforms
 ```
 
-**Key insight:** Risk score is not a claims pipeline stage. It re-enters claims as a feature — high-risk policies filed shortly after issuance is one of the strongest fraud signals.
+**Key insight — shared data spine:** Risk score is not a claims pipeline stage.
+It re-enters claims as a feature — high-risk policies filed shortly after issuance
+is one of the strongest fraud signals.
+
+**Key insight — entity resolution as foundation:** Entity resolution sits below
+the feature store. Vehicle (VIN decode, MSRP, ADAS), Person (dedup, role
+assignment), Address (normalization), and Phone (normalization) are resolved
+once as independent entities before any feature computation or graph construction
+begins. Both platforms consume resolved entities — neither platform owns them.
 
 One cohesive platform. Not isolated models.
 
@@ -88,15 +100,16 @@ Repeat
 | **Gemini** | Large context doc review, Google ecosystem |
 | **Perplexity** | Industry benchmarks, real-world validation |
 
-**Rule:** Max 2 LLM review cycles per component before moving forward. Working and documented beats perfect and unfinished.
+**Rule:** Max 2 LLM review cycles per component before moving forward. Working
+and documented beats perfect and unfinished.
 
 ---
 
 ## Two-Month Roadmap
 
 ```
-Week 1-2   Synthetic data generator + shared feature store
-             (separate archetypes for underwriting + claims)
+Week 1-2   Entity resolution layer + synthetic data generator + shared feature store
+             (entity_*.py first; archetypes and feature store depend on resolved entities)
 Week 3     Fraud scoring (end-to-end, claims platform)
 Week 4     Risk scoring + Quote Generation Agent (underwriting platform)
 Week 5     FNOL Agent + Document Verification Agent (claims platform)
@@ -109,9 +122,28 @@ Week 8     Articles + meetup deck + repo polish + LinkedIn
 
 ## Phase 1 — Data Foundation (Week 1-2)
 
+### Entity Resolution Strategy
+
+Resolve all shared entities before generating features or building the graph.
+Entity resolution is the lowest layer — both platforms depend on it.
+
+| Entity | Key | Resolved By | Consumers |
+|---|---|---|---|
+| Vehicle | VIN | entity_vehicle.py | Feature Store, Neo4j, Telematics |
+| Person | person_id (hashed) | entity_person.py | Feature Store, Neo4j, Claims |
+| Address | address_hash | entity_address.py | Neo4j (shares_address edges) |
+| Phone | phone_hash | entity_phone.py | Neo4j (shares_phone edges) |
+| Policy | policy_id | entity_policy.py | Feature Store, FNOL Agent |
+
+**Key rule:** `graph_builder.py` loads resolved entities as nodes and edges only.
+It does not compute features. Vehicle features (MSRP, ADAS efficacy, age) are
+computed from resolved entities in the feature store pipeline — not inside the
+graph builder.
+
 ### Synthetic Data Strategy
 
-**Lesson learned:** Generate data top-down from realistic archetypes, not bottom-up from random values.
+**Lesson learned:** Generate data top-down from realistic archetypes, not
+bottom-up from random values.
 
 Define 10 claim archetypes first:
 
@@ -128,7 +160,8 @@ Define 10 claim archetypes first:
 | Total loss misrepresentation | Opportunistic | Pre-existing damage photos |
 | Legitimate major accident | None | Police report, ER visit, telematics |
 
-Generate synthetic data from these archetypes using `faker` + domain-specific distributions. One shared dataset feeds ALL models.
+Generate synthetic data from these archetypes using `faker` + domain-specific
+distributions. One shared dataset feeds ALL models.
 
 ---
 
@@ -147,7 +180,8 @@ CLAIMS PLATFORM
 5. Claims automation        ← straight-through processing for low-risk
 ```
 
-**Note:** Risk score at policy issuance is stored in feature store and reused as a fraud scoring input feature — not a pipeline dependency.
+**Note:** Risk score at policy issuance is stored in feature store and reused
+as a fraud scoring input feature — not a pipeline dependency.
 
 ### Fraud Scoring Architecture
 
@@ -204,13 +238,16 @@ Nightly batch computation    →     Pre-computed features
 
 Shared feature_definitions.py ← single source of truth
 (same functions, offline + online — prevents training-serving skew)
+
+Both pipelines consume resolved entities from entities/ layer.
+Entity resolution is not repeated at feature computation time.
 ```
 
 ### Decision Orchestration Layer
 
 ```
 Score Tier    │ Threshold │ Action
-──────────────┼───────────┼──────────────────────────────
+──────────────┼───────────┼──────────────────────────────────────
 Low Risk      │  < 0.25   │ Straight-through processing
 Medium Risk   │  0.25–0.6 │ Request additional evidence
 High Risk     │  0.6–0.85 │ SIU referral
@@ -228,6 +265,9 @@ Graph 1-2 hop lookup              LLM narrative reconciliation
 Lightweight image hash            Third-party enrichment
 Decision routing                  Cross-carrier intelligence
 ```
+
+Note: Entity resolution is a pre-computation step completed offline.
+It is not part of the sync or async inference path.
 
 ---
 
@@ -287,6 +327,8 @@ Decision routing                  Cross-carrier intelligence
 | Month spent on basics without clear output | Time-box each component, working beats perfect |
 | RAG felt disconnected | Wire RAG into FNOL Agent as policy document retrieval |
 | Linear planning didn't reflect reality | Iterative loops with multi-LLM review panel |
+| Vehicle features computed in graph_builder.py | Entity layer runs first; graph_builder loads nodes/edges only |
+| Shared entities (Vehicle, Person, Address, Phone) had no canonical home | entities/ layer defined as independent resolution step before feature store and graph build |
 
 ---
 
@@ -321,7 +363,15 @@ smart-oak-insurance/
 │   │   ├── archetypes_underwriting.py   ← driver/vehicle risk profiles
 │   │   └── validator.py                 ← schema + realism checks
 │   ├── raw/                             ← gitignored
+│   ├── entities/                        ← gitignored; resolved entities output
 │   └── processed/                       ← gitignored
+│
+├── entities/                            ← NEW: independent entity resolution layer
+│   ├── entity_vehicle.py                ← VIN decode, MSRP lookup, ADAS flags
+│   ├── entity_person.py                 ← dedup, role assignment (policyholder/driver/claimant)
+│   ├── entity_address.py                ← normalization, hash key for graph edges
+│   ├── entity_phone.py                  ← normalization, hash key for graph edges
+│   └── entity_policy.py                 ← coverage validation, inception date, lapse calc
 │
 ├── features/
 │   ├── feature_definitions.py           ← single source of truth, no skew
@@ -331,8 +381,8 @@ smart-oak-insurance/
 │
 ├── graph/
 │   ├── neo4j_client.py
-│   ├── graph_builder.py                 ← load data → Neo4j
-│   ├── graph_features.py                ← fraud ring detection
+│   ├── graph_builder.py                 ← loads resolved entities as nodes + edges ONLY
+│   ├── graph_features.py                ← graph-derived features (ring detection, centrality)
 │   └── graph_queries.py                 ← Cypher query library
 │
 ├── underwriting/                        ← UNDERWRITING PLATFORM
