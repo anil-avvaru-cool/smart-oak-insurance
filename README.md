@@ -50,7 +50,7 @@ docker compose run --rm app python main.py --compute-graph-features --validate-d
 docker compose run --rm app python main.py --validate-data
 
 # Maintenance
-# Delete existing with constraints
+# Delete existing graph with constraints
 docker compose run --rm app python main.py --reset-graph
 # 1. Export variables to your current host terminal(only once)
 export $(cat .env | xargs)

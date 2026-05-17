@@ -121,7 +121,7 @@ def build_telematics_features(
 | 15 | `narrative_complexity_score` | float | No | NLP |
 | 16 | `risk_score_at_issuance` | float | No | Shared ← underwriting |
 | 17 | `policy_tier_at_issuance` | str | No | Shared ← underwriting |
-| 18 | `ip_geolocation_delta_km` | float | No | Device/geo |
+| 18 | `ip_geolocation_delta_miles` | float | No | Device/geo |
 | 19 | `device_fingerprint_match` | bool | No | Device/geo |
 | 20 | `submission_channel` | str | No | Tabular |
 

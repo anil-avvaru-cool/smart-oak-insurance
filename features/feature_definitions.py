@@ -76,7 +76,7 @@ def build_claim_feature_vector(claim_payload: dict, underwriting_features: dict 
         "narrative_complexity_score": float(claim_payload.get("narrative_complexity_score", 0.0) or 0.0),
         "risk_score_at_issuance": underwriting_features.get("risk_score_at_issuance") or claim_payload.get("risk_score_at_issuance"),
         "policy_tier_at_issuance": underwriting_features.get("policy_tier_at_issuance") or claim_payload.get("policy_tier_at_issuance"),
-        "ip_geolocation_delta_km": float(claim_payload.get("ip_geolocation_delta_km", 0.0) or 0.0),
+        "ip_geolocation_delta_miles": float(claim_payload.get("ip_geolocation_delta_miles", 0.0) or 0.0),
         "device_fingerprint_match": bool(claim_payload.get("device_fingerprint_match", True)),
         "submission_channel": claim_payload.get("submission_channel", "unknown"),
     }

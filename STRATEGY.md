@@ -110,8 +110,8 @@ and documented beats perfect and unfinished.
 ```
 Week 1-2   Entity resolution layer + synthetic data generator + shared feature store
              (entity_*.py first; archetypes and feature store depend on resolved entities)
-Week 3     Fraud scoring (end-to-end, claims platform)
-Week 4     Risk scoring + Quote Generation Agent (underwriting platform)
+Week 3     Risk scoring + Quote Generation Agent (underwriting platform)
+Week 4     Fraud scoring (end-to-end, claims platform)
 Week 5     FNOL Agent + Document Verification Agent (claims platform)
 Week 6     Claims Automation + Subrogation Agent
 Week 7     FastAPI + AWS deployment + architecture diagram

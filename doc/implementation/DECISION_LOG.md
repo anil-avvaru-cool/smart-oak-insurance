@@ -211,3 +211,8 @@ the tabular-only fallback scoring policy defined in `Fraud_Detection_Architectur
 **Applies to:** `entities/` layer (new), `graph_builder.py` (scope reduced to node/edge
 loading only), `offline_pipeline.py` (reads from `data/entities/` not raw generator
 output directly).
+
+## DEC-012 Correct other units to US standard units like miles
+Should you correct ip_geolocation_delta_km → ip_geolocation_delta_miles?
+Yes, correct it. The agent spec says "USA standard units in data and outputs" — non-negotiable. More practically, if investigators or business stakeholders ever read raw feature values, mixing km and miles creates confusion. The rename is a one-line change in feature_definitions.py and the snapshot schema, and it's better to fix it now before it propagates into trained model artifacts and audit snapshots that are immutable.
+Add a decision log entry (DEC-012) so the correction is traceable.
