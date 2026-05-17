@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import List
 
 import pandas as pd
 from neo4j import GraphDatabase, Session
@@ -103,34 +102,55 @@ def _compute_per_claim_attorney_centrality(session: Session) -> None:
 
 def _compute_hop_distances(session: Session, max_hops: int) -> None:
     """
-    Flood-fill from all fraud seed nodes simultaneously.
+    Multi-source BFS from all fraud seeds simultaneously.
 
-    One shortestPath query over all (fraud_seed, claim) pairs replaces the
-    original N-per-claim shortestPath loop.  Neo4j executes the traversal
-    server-side; Python sees a single round trip.
+    Seeds all fraud Claim nodes at distance 0, then expands one hop at a time
+    across the entire graph (Claim, Claimant, Entity, Attorney, Vehicle nodes).
+    O(V+E) total — replaces the O(F*C*(V+E)) Cartesian-product shortestPath.
     """
     logger.info(
-        "Computing fraud hop distances (flood-fill, max_hops=%d)...", max_hops
+        "Computing fraud hop distances (multi-source BFS, max_hops=%d)...", max_hops
     )
 
-    session.run(
-        f"""
-        MATCH (f:Claim {{is_fraud: true}}), (cl:Claim)
-        WHERE f <> cl
-        MATCH p = shortestPath((cl)-[*..{max_hops}]-(f))
-        WITH cl, min(length(p)) AS hop_dist
-        SET cl.graph_hop_distance = hop_dist
+    # Clean up any leftover tmp_hop from a previous interrupted run.
+    session.run("MATCH (n) WHERE n.tmp_hop IS NOT NULL REMOVE n.tmp_hop")
+
+    seed_count = session.run(
         """
-    )
+        MATCH (f:Claim {is_fraud: true})
+        SET f.tmp_hop = 0
+        RETURN count(f) AS cnt
+        """
+    ).single()["cnt"]
+    logger.info("BFS: seeded %d fraud claims at distance 0", seed_count)
 
-    # Claims with no path to any fraud seed get the sentinel value.
+    for hop in range(1, max_hops + 1):
+        result = session.run(
+            """
+            MATCH (known)--(neighbor)
+            WHERE known.tmp_hop = $prev_hop AND neighbor.tmp_hop IS NULL
+            SET neighbor.tmp_hop = $hop
+            RETURN count(neighbor) AS cnt
+            """,
+            prev_hop=hop - 1,
+            hop=hop,
+        )
+        new_nodes = result.single()["cnt"]
+        logger.info("BFS hop %d: %d new nodes reached", hop, new_nodes)
+        if new_nodes == 0:
+            break
+
+    # Assign graph_hop_distance to Claims from BFS result; sentinel for unreachable.
     session.run(
         f"""
         MATCH (cl:Claim)
-        WHERE cl.graph_hop_distance IS NULL
-        SET cl.graph_hop_distance = {SENTINEL_HOP}
+        SET cl.graph_hop_distance = coalesce(cl.tmp_hop, {SENTINEL_HOP})
+        REMOVE cl.tmp_hop
         """
     )
+
+    # Remove tmp_hop from all remaining non-Claim nodes.
+    session.run("MATCH (n) WHERE n.tmp_hop IS NOT NULL REMOVE n.tmp_hop")
 
     logger.info("Hop distance flood-fill complete")
 

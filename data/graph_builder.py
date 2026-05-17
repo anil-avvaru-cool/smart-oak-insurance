@@ -55,6 +55,27 @@ def _normalize_key(value: str) -> str:
     return key
 
 
+def clear_graph(neo4j_uri: str, neo4j_user: str, neo4j_password: str) -> None:
+    """Delete all nodes/relationships and drop all constraints for a clean slate."""
+    driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
+    with driver.session() as session:
+        session.run("MATCH (n) DETACH DELETE n")
+        logger.info("All nodes and relationships deleted")
+
+        constraints = session.run("SHOW CONSTRAINTS").data()
+        for c in constraints:
+            name = c.get("name")
+            if name:
+                try:
+                    session.run(f"DROP CONSTRAINT {name}")
+                    logger.info("Dropped constraint: %s", name)
+                except Neo4jError as e:
+                    logger.warning("Could not drop constraint %s: %s", name, e)
+
+        logger.info("Graph cleared — ready for fresh load")
+    driver.close()
+
+
 def build_graph_from_claims(
     claims_path: Path,
     neo4j_uri: str,

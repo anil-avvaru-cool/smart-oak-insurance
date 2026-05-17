@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 from data.generator import generate_data
 from data.entities import resolve_vehicles, resolve_persons, resolve_addresses, resolve_phones, resolve_policies
-from data.graph_builder import build_graph_from_claims
+from data.graph_builder import build_graph_from_claims, clear_graph
 from data.graph_features import compute_graph_features
 from data.validator import validate_data
 from data.config import CLAIMS_OUTPUT
@@ -17,6 +17,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Smart Oak Insurance data tools")
     parser.add_argument("--generate-data", action="store_true", help="Generate synthetic quote and claim datasets")
     parser.add_argument("--resolve-entities", action="store_true", help="Resolve and normalize entity data (vehicles, persons, addresses, phones, policies)")
+    parser.add_argument("--reset-graph", action="store_true", help="Delete all graph nodes/relationships and drop all constraints (use before --build-graph for a clean reload)")
     parser.add_argument("--build-graph", action="store_true", help="Build graph from claims data in Neo4j")
     parser.add_argument("--compute-graph-features", action="store_true", help="Compute graph features and update claims data")
     parser.add_argument("--validate-data", action="store_true", help="Validate generated datasets")
@@ -40,6 +41,12 @@ def main() -> None:
         resolve_policies()
         print("Entity resolution complete")
         if not args.validate_data:
+            return
+
+    if args.reset_graph:
+        clear_graph(os.environ["NEO4J_URI"], os.environ["NEO4J_USER"], os.environ["NEO4J_PASSWORD"])
+        print("Graph cleared")
+        if not args.build_graph:
             return
 
     if args.build_graph:
