@@ -3,8 +3,12 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
+
+import pandas as pd
 
 from .feature_definitions import FEATURE_STORE_VERSION, build_claim_feature_vector, build_quote_feature_vector
+from .online_serving import OnlineFeatureStore
 
 
 def current_utc_timestamp() -> str:
@@ -60,3 +64,59 @@ def write_snapshot(snapshot: dict, output_dir: Path) -> Path:
     file_path = output_dir / f"{snapshot['record_id']}.json"
     file_path.write_text(json.dumps(snapshot, indent=2))
     return file_path
+
+
+def _to_native(val: Any) -> Any:
+    """Convert numpy scalars to native Python types for JSON serialization."""
+    if hasattr(val, "item"):
+        return val.item()
+    return val
+
+
+def run_offline_pipeline(
+    quotes_path: Path,
+    claims_path: Path,
+    output_dir: Path,
+    online_store: OnlineFeatureStore | None = None,
+) -> tuple[int, int]:
+    """Batch-process all quotes and claims into feature snapshots.
+
+    Pass 1 — quotes: builds feature vectors, writes JSON snapshots, pushes to online
+    store, and indexes underwriting features by quote_id for cross-platform linking.
+
+    Pass 2 — claims: joins each claim to its underwriting context via quote_id
+    (the shared data spine), builds claim feature vectors, writes snapshots.
+
+    Returns (quotes_written, claims_written).
+    """
+    quotes_df = pd.read_parquet(quotes_path)
+    claims_df = pd.read_parquet(claims_path)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Pass 1: quotes → build underwriting feature index keyed by quote_id
+    underwriting_index: dict[str, dict] = {}
+    quotes_written = 0
+
+    for _, row in quotes_df.iterrows():
+        payload = {k: _to_native(v) for k, v in row.items()}
+        snapshot = build_quote_snapshot(payload)
+        write_snapshot(snapshot, output_dir)
+        if online_store is not None:
+            online_store.set_features(snapshot["record_id"], snapshot["features"])
+        underwriting_index[str(row["quote_id"])] = snapshot["features"]
+        quotes_written += 1
+
+    # Pass 2: claims → join underwriting context via quote_id (shared data spine)
+    claims_written = 0
+
+    for _, row in claims_df.iterrows():
+        payload = {k: _to_native(v) for k, v in row.items()}
+        underwriting = underwriting_index.get(str(row.get("quote_id", "")))
+        snapshot = build_claim_snapshot(payload, underwriting)
+        write_snapshot(snapshot, output_dir)
+        if online_store is not None:
+            online_store.set_features(snapshot["record_id"], snapshot["features"])
+        claims_written += 1
+
+    return quotes_written, claims_written

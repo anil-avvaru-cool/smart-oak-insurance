@@ -191,7 +191,12 @@ def compute_graph_features(
     batch_size: int = BATCH_SIZE,
 ) -> pd.DataFrame:
 
-    pd.read_parquet(claims_path)
+    if not claims_path.exists():
+        raise FileNotFoundError(
+            f"Claims file not found: {claims_path}. Run --generate-data first."
+        )
+    expected_count = len(pd.read_parquet(claims_path))
+    logger.info("Claims parquet: %d records to enrich", expected_count)
 
     driver = GraphDatabase.driver(
         neo4j_uri,

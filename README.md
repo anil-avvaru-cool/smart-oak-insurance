@@ -25,6 +25,7 @@ Synthetic insurance risk-and-fraud platform for underwriting and claims modeling
 Run locally:
 ```bash
 uv run -m main --generate-data
+uv run -m main --resolve-entities
 ```
 
 Validate generated data:
@@ -32,7 +33,7 @@ Validate generated data:
 uv run -m main --validate-data
 ```
 
-Generated outputs are written to `data/raw/quotes.parquet` and `data/raw/claims.parquet`.
+Generated outputs are written to `data/raw/quotes.parquet`, `data/raw/claims.parquet`, and resolved entities to `data/entities/`.
 
 ## Docker
 
@@ -41,6 +42,7 @@ Docker commands:
 docker compose up -d --build
 #Run the generator inside Docker:
 docker compose run --rm app python main.py --generate-data
+docker compose run --rm app python main.py --resolve-entities
 docker compose up -d neo4j redis
 docker compose run --rm app python main.py --build-graph --validate-data
 docker compose run --rm app python main.py --compute-graph-features --validate-data

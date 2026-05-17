@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import random
 from pathlib import Path
@@ -9,6 +10,8 @@ import pandas as pd
 from faker import Faker
 from neo4j import GraphDatabase, Session
 from neo4j.exceptions import Neo4jError
+
+from data.config import RAW_DATA_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +64,21 @@ def build_graph_from_claims(
 ) -> None:
 
     claims_df = pd.read_parquet(claims_path)
-
     logger.info("Loaded %s claims", len(claims_df))
+
+    # Load resolved vehicle entities (DEC-011: graph_builder loads nodes/edges only)
+    vehicles_path = RAW_DATA_DIR / "entities" / "vehicles.parquet"
+    if not vehicles_path.exists():
+        raise FileNotFoundError(
+            f"Resolved vehicle entities not found at {vehicles_path}. "
+            "Run --resolve-entities before --build-graph."
+        )
+    vehicles_df = pd.read_parquet(vehicles_path)
+    quote_to_vehicle: Dict[str, Dict] = (
+        vehicles_df.set_index("quote_id")[["vin", "make", "model", "year"]]
+        .to_dict("index")
+    )
+    logger.info("Loaded %s resolved vehicles", len(vehicles_df))
 
     faker = Faker()
 
@@ -244,34 +260,41 @@ def build_graph_from_claims(
                     )
 
                 # ------------------------------------------------------
-                # Vehicle
+                # Vehicle — loaded from resolved entity layer (DEC-011)
                 # ------------------------------------------------------
 
-                vehicle_vin = faker.vin()
+                vehicle_info = quote_to_vehicle.get(str(claim["quote_id"]))
+                if vehicle_info is not None:
+                    resolved_vin = vehicle_info["vin"]
 
-                tx.run(
-                    """
-                    MERGE (v:Vehicle {vin: $vin})
-                    SET v.make = $make,
-                        v.model = $model,
-                        v.year = $year
-                    """,
-                    vin=claim["vehicle_vin"],
-                    make=faker.company(),
-                    model=faker.word(),
-                    year=faker.year(),
-                )
+                    tx.run(
+                        """
+                        MERGE (v:Vehicle {vin: $vin})
+                        SET v.make = $make,
+                            v.model = $model,
+                            v.year = $year
+                        """,
+                        vin=resolved_vin,
+                        make=vehicle_info["make"],
+                        model=vehicle_info["model"],
+                        year=vehicle_info["year"],
+                    )
 
-                tx.run(
-                    """
-                    MATCH (cl:Claim {id: $claim_id}),
-                          (v:Vehicle {vin: $vin})
+                    tx.run(
+                        """
+                        MATCH (cl:Claim {id: $claim_id}),
+                              (v:Vehicle {vin: $vin})
 
-                    MERGE (cl)-[:INVOLVES]->(v)
-                    """,
-                    claim_id=claim_id,
-                    vin=vehicle_vin,
-                )
+                        MERGE (cl)-[:INVOLVES]->(v)
+                        """,
+                        claim_id=claim_id,
+                        vin=resolved_vin,
+                    )
+                else:
+                    logger.warning(
+                        "No resolved vehicle for quote_id %s — Vehicle node skipped",
+                        claim["quote_id"],
+                    )
 
                 # ------------------------------------------------------
                 # Shared entities
@@ -286,7 +309,7 @@ def build_graph_from_claims(
 
                     if key not in entities:
 
-                        entity_id = f"entity_{len(entities)}"
+                        entity_id = "e_" + hashlib.sha256(key.encode()).hexdigest()[:16]
 
                         entities[key] = entity_id
 

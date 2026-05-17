@@ -65,6 +65,8 @@ State 3 is a meaningful fraud signal — organized rings frequently suppress tel
 
 **Trade-off accepted:** Adds 2 derived features per telematics signal. Accepted — derivation is cheap and the signals are high-value.
 
+**Applies to:** `entity_vehicle.py` — OBD-II device → VIN linkage and enrollment status resolution. `feature_definitions.py` — `build_telematics_features()`, both platforms.
+
 **Convention:** Apply this trio pattern to any future nullable signal group added to the feature store.
 
 ---
@@ -72,7 +74,7 @@ State 3 is a meaningful fraud signal — organized rings frequently suppress tel
 ## DEC-004 — feature_definitions.py as Layer 0
 
 **Date:** 2026-Q2
-**Decision:** `features/feature_definitions.py` is built before archetypes. Archetypes import feature names from `feature_definitions.py`. `feature_definitions.py` has no imports from archetypes or generator.
+**Decision:** `features/feature_definitions.py` is built before archetypes. Archetypes import feature names from `feature_definitions.py`. `feature_definitions.py` has no imports from archetypes, generator, or `entity_*.py` modules. Entity resolution outputs are passed as arguments to feature computation functions — not imported as modules. This preserves Layer 0 independence.
 
 **Rationale:**
 Training-serving skew — where the offline training pipeline and the online serving pipeline compute features differently — is the most common silent failure mode in production ML. The root cause is almost always feature names or logic defined in two places. Making `feature_definitions.py` the dependency root, not an output of data generation, forces both pipelines to share one implementation from day one.
@@ -181,40 +183,6 @@ This is the architectural "shared data spine" concept from `STRATEGY.md` — ris
 
 ---
 
-**T-01 — Amend DEC-003 applies-to**
-
-```markdown
-# BEFORE
-**Applies to:** `feature_definitions.py` — `build_telematics_features()`, both platforms.
-
-# AFTER
-**Applies to:** `entity_vehicle.py` — OBD-II device → VIN linkage and enrollment status resolution.
-`feature_definitions.py` — `build_telematics_features()`, both platforms.
-```
-
----
-
-**T-02 — Amend DEC-004 rationale**
-
-```markdown
-# BEFORE
-**Decision:** `features/feature_definitions.py` is built before archetypes. Archetypes import
-feature names from `feature_definitions.py`. `feature_definitions.py` has no imports from
-archetypes or generator.
-
-# AFTER
-**Decision:** `features/feature_definitions.py` is built before archetypes. Archetypes import
-feature names from `feature_definitions.py`. `feature_definitions.py` has no imports from
-archetypes, generator, or `entity_*.py` modules. Entity resolution outputs are passed as
-arguments to feature computation functions — not imported as modules. This preserves
-Layer 0 independence.
-```
-
----
-
-**T-03 — Add DEC-011**
-
-```markdown
 ## DEC-011 — Entity resolution as independent pre-graph layer
 
 **Date:** 2026-Q2
@@ -243,6 +211,3 @@ the tabular-only fallback scoring policy defined in `Fraud_Detection_Architectur
 **Applies to:** `entities/` layer (new), `graph_builder.py` (scope reduced to node/edge
 loading only), `offline_pipeline.py` (reads from `data/entities/` not raw generator
 output directly).
-```
-
----
