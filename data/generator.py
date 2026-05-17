@@ -119,7 +119,7 @@ def generate_claims(quotes_df: pd.DataFrame, seed: int = RANDOM_SEED + 1) -> pd.
             "claim_id": faker.uuid4(),
             "quote_id": quote["quote_id"],
             "state": quote["state"],
-            "policy_inception_days": int(max(0.0, rng.normal(quote["risk_score_at_issuance"] * 120.0, 35.0))),
+            "policy_inception_days": int(max(0.0, rng.normal(35.0 if is_fraud else 90.0, 30.0))),
             "prior_claims_count": int(np.clip(rng.poisson(quote["prior_loss_frequency"] * 1.8 + 0.3), 0, 5)),
             "reported_injury_count": int(np.clip(rng.normal(1.0 if not is_fraud else 2.1, 1.1), 0, 5)),
             "reporting_delay_days": int(np.clip(rng.normal(archetype.reporting_delay_mean, archetype.reporting_delay_std), 0, 45)),
