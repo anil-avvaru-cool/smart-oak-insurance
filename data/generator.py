@@ -35,7 +35,7 @@ def _score_quote(quote: dict[str, Any]) -> float:
     score += min(1.0, float(quote["prior_loss_severity_avg"]) / 20000.0 * 0.35)
     score += min(1.0, float(quote["insurance_lapse_days"]) / 120.0 * 0.20)
     score += min(1.0, float(quote["violation_severity_index"]) / 5.0 * 0.18)
-    if quote.get("telematics_enrolled", False) and not quote.get("telematics"):
+    if quote.get("telematics_enrolled", False) and quote.get("telematics_distraction_score") is None:
         score += 0.12
     if quote["vehicle_power"] > 220:
         score += 0.08
@@ -67,7 +67,7 @@ def generate_quotes(seed: int = RANDOM_SEED) -> pd.DataFrame:
         for _ in range(archetype.volume):
             state = rng.choice(US_STATE_ABBREVIATIONS)
             has_telematics = rng.random() < archetype.telematics_opt_in_rate
-            telematics = _sample_telematics(rng) if has_telematics else None
+            telematics = _sample_telematics(rng) if has_telematics else {}
             credit_score = int(_bounded_normal(rng, archetype.credit_score_mean, archetype.credit_score_std, 500, 850))
             prior_loss_frequency = float(np.clip(_bounded_normal(rng, archetype.prior_loss_frequency_mean, 0.12, 0.0, 1.0), 0.0, 1.0))
             prior_loss_severity_avg = float(np.clip(_bounded_normal(rng, archetype.prior_loss_severity_mean, 1600, 500.0, 20000.0), 0.0, None))
@@ -88,7 +88,10 @@ def generate_quotes(seed: int = RANDOM_SEED) -> pd.DataFrame:
                 "vehicle_age_years": int(_bounded_normal(rng, 3.5, 2.5, 0, 20)),
                 "geohash_risk_score": float(np.clip(rng.random() * 0.4 + 0.1, 0.0, 1.0)),
                 "annual_mileage_estimate": float(_bounded_normal(rng, archetype.annual_mileage_mean, 4300, 1000, 40000)),
-                "telematics": telematics,
+                "telematics_distraction_score": telematics.get("distraction_score"),
+                "telematics_hard_brake_rate": telematics.get("hard_brake_rate"),
+                "telematics_crash_match": telematics.get("crash_match"),
+                "telematics_commute_entropy": telematics.get("commute_entropy"),
                 "telematics_enrolled": rng.random() < archetype.telematics_opt_in_rate,
             }
             quote_payload["risk_score_at_issuance"] = _score_quote(quote_payload)
@@ -111,6 +114,7 @@ def generate_claims(quotes_df: pd.DataFrame, seed: int = RANDOM_SEED + 1) -> pd.
         is_fraud = rng.random() < fraud_probability
         archetype = _choose_claim_archetype(is_fraud, rng)
 
+        _has_claim_telematics = rng.random() < archetype.telematics_opt_in_rate
         claim_payload = {
             "claim_id": faker.uuid4(),
             "quote_id": quote["quote_id"],
@@ -129,7 +133,10 @@ def generate_claims(quotes_df: pd.DataFrame, seed: int = RANDOM_SEED + 1) -> pd.
             "narrative_complexity_score": float(np.clip(rng.normal(archetype.narrative_complexity_mean, 0.18), 0.0, 1.0)),
             "device_fingerprint_match": rng.random() < archetype.device_fingerprint_match_prob,
             "submission_channel": rng.choice(["mobile", "agent_portal", "web", "broker"], p=[0.4, 0.2, 0.3, 0.1]),
-            "telematics": quote["telematics"] if rng.random() < archetype.telematics_opt_in_rate else None,
+            "telematics_distraction_score": quote["telematics_distraction_score"] if _has_claim_telematics else None,
+            "telematics_hard_brake_rate": quote["telematics_hard_brake_rate"] if _has_claim_telematics else None,
+            "telematics_crash_match": quote["telematics_crash_match"] if _has_claim_telematics else None,
+            "telematics_commute_entropy": quote["telematics_commute_entropy"] if _has_claim_telematics else None,
             "risk_score_at_issuance": quote["risk_score_at_issuance"],
             "policy_tier_at_issuance": quote["policy_tier_at_issuance"],
             "is_fraud": is_fraud,

@@ -8,14 +8,19 @@ FEATURE_STORE_VERSION = "v1.0.0"
 CREDIT_RESTRICTED_STATES = {"CA", "MA", "MI", "HI"}
 
 
-def build_telematics_features(telematics: dict | None, policy: dict) -> FeatureVector:
+def build_telematics_features(payload: dict) -> FeatureVector:
+    distraction_score = payload.get("telematics_distraction_score")
+    hard_brake_rate = payload.get("telematics_hard_brake_rate")
+    crash_match = payload.get("telematics_crash_match")
+    commute_entropy = payload.get("telematics_commute_entropy")
+    available = any(v is not None for v in (distraction_score, hard_brake_rate, crash_match, commute_entropy))
     return {
-        "telematics_distraction_score": telematics.get("distraction_score") if telematics else None,
-        "telematics_hard_brake_rate": telematics.get("hard_brake_rate") if telematics else None,
-        "telematics_crash_match": telematics.get("crash_match") if telematics else None,
-        "commute_entropy": telematics.get("commute_entropy") if telematics else None,
-        "telematics_available": telematics is not None,
-        "telematics_enrolled_but_missing": bool(policy.get("telematics_enrolled", False) and telematics is None),
+        "telematics_distraction_score": distraction_score,
+        "telematics_hard_brake_rate": hard_brake_rate,
+        "telematics_crash_match": crash_match,
+        "telematics_commute_entropy": commute_entropy,
+        "telematics_available": available,
+        "telematics_enrolled_but_missing": bool(payload.get("telematics_enrolled", False) and not available),
     }
 
 
@@ -53,7 +58,7 @@ def build_quote_feature_vector(quote_payload: dict) -> FeatureVector:
         "policy_tier_at_issuance": quote_payload.get("policy_tier_at_issuance"),
     }
 
-    features.update(build_telematics_features(quote_payload.get("telematics"), quote_payload))
+    features.update(build_telematics_features(quote_payload))
     return apply_state_regulatory_mask(features, quote_payload.get("state", ""))
 
 
@@ -81,5 +86,5 @@ def build_claim_feature_vector(claim_payload: dict, underwriting_features: dict 
         "submission_channel": claim_payload.get("submission_channel", "unknown"),
     }
 
-    features.update(build_telematics_features(claim_payload.get("telematics"), claim_payload))
+    features.update(build_telematics_features(claim_payload))
     return features

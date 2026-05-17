@@ -29,7 +29,10 @@ def test_build_quote_feature_vector_applies_state_mask() -> None:
         "vehicle_power": 200,
         "vehicle_age_years": 3,
         "annual_mileage_estimate": 12000,
-        "telematics": None,
+        "telematics_distraction_score": None,
+        "telematics_hard_brake_rate": None,
+        "telematics_crash_match": None,
+        "telematics_commute_entropy": None,
         "telematics_enrolled": True,
     }
     features = build_quote_feature_vector(payload)
@@ -54,7 +57,10 @@ def test_build_claim_feature_vector_combines_underwriting_features() -> None:
         "claimant_count": 1,
         "device_fingerprint_match": True,
         "submission_channel": "mobile",
-        "telematics": {"crash_match": 0.8},
+        "telematics_distraction_score": None,
+        "telematics_hard_brake_rate": None,
+        "telematics_crash_match": 0.8,
+        "telematics_commute_entropy": None,
     }
     underwriting_features = {"risk_score_at_issuance": 0.54, "policy_tier_at_issuance": "gold"}
     features = build_claim_feature_vector(payload, underwriting_features)
@@ -77,7 +83,10 @@ def test_feature_store_client_persists_offline_and_online() -> None:
             "vehicle_power": 150,
             "vehicle_age_years": 2,
             "annual_mileage_estimate": 15000,
-            "telematics": None,
+            "telematics_distraction_score": None,
+            "telematics_hard_brake_rate": None,
+            "telematics_crash_match": None,
+            "telematics_commute_entropy": None,
             "telematics_enrolled": False,
         }
 
