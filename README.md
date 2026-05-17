@@ -45,8 +45,8 @@ docker compose run --rm app python main.py --generate-data
 docker compose run --rm app python main.py --resolve-entities
 docker compose up -d neo4j redis
 # Delete existing and start from scratch
-docker compose run --rm app python main.py --build-graph --validate-data
-docker compose run --rm app python main.py --compute-graph-features --validate-data
+docker compose run --rm app python main.py --build-graph
+docker compose run --rm app python main.py --compute-graph-features
 docker compose run --rm app python main.py --validate-data
 
 # Maintenance

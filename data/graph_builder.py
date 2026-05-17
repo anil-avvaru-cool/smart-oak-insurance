@@ -120,8 +120,8 @@ def build_graph_from_claims(
         for _ in range(200)
     ]
 
-    fraud_phone_pool = shared_phone_pool[:40]
-    fraud_address_pool = shared_address_pool[:25]
+    fraud_phone_pool = shared_phone_pool
+    fraud_address_pool = shared_address_pool
 
     fraud_attorney_pool = [
         f"fraud_attorney_{i}"
@@ -197,12 +197,12 @@ def build_graph_from_claims(
 
                     claimant_phone = (
                         random.choice(shared_phone_pool)
-                        if random.random() < 0.03
+                        if random.random() < 0.28
                         else faker.phone_number()
                     )
                     claimant_address = (
                         random.choice(shared_address_pool)
-                        if random.random() < 0.05
+                        if random.random() < 0.30
                         else faker.address().replace("\n", ", ")
                     )
                     attorney_id = (

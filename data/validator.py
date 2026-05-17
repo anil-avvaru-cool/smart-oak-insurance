@@ -151,7 +151,8 @@ def validate_graph_topology(neo4j_uri: str | None = None, neo4j_user: str | None
                 RETURN count(*) as fraud_count
             """)
 
-            fraud_count = result.single()['fraud_count'] if result.single() else 0
+            row = result.single()
+            fraud_count = row['fraud_count'] if row else 0
             print(f"  fraud claimants: {fraud_count}")
 
             if fraud_count == 0:
