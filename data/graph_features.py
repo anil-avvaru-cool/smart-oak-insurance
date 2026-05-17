@@ -22,7 +22,7 @@ BATCH_SIZE = 1000
 
 
 def _compute_attorney_centrality(tx) -> None:
-
+    """Fetch all attorney degrees in one query, then bulk-SET centrality via UNWIND."""
     logger.info("Computing attorney centrality...")
 
     rows = list(
@@ -30,7 +30,7 @@ def _compute_attorney_centrality(tx) -> None:
             """
             MATCH (a:Attorney)
             OPTIONAL MATCH (a)--(n)
-            WITH a, COUNT(n) AS deg
+            WITH a, count(n) AS deg
             RETURN a.id AS id, deg
             """
         )
@@ -42,144 +42,97 @@ def _compute_attorney_centrality(tx) -> None:
 
     max_deg = max(r["deg"] for r in rows) or 1
 
-    for row in rows:
+    data = [
+        {"id": r["id"], "centrality": float(r["deg"]) / float(max_deg)}
+        for r in rows
+    ]
 
-        centrality = float(row["deg"]) / float(max_deg)
+    tx.run(
+        """
+        UNWIND $rows AS row
+        MATCH (a:Attorney {id: row.id})
+        SET a.centrality = row.centrality
+        """,
+        rows=data,
+    )
 
-        tx.run(
-            """
-            MATCH (a:Attorney {id: $id})
-            SET a.centrality = $centrality
-            """,
-            id=row["id"],
-            centrality=centrality,
-        )
-
-    logger.info("Attorney centrality complete")
+    logger.info("Attorney centrality complete (%d attorneys)", len(data))
 
 
-def _get_all_claim_ids(session: Session) -> List[str]:
+def _compute_shared_attribute_counts(session: Session) -> None:
+    """Bulk-compute shared entity counts for all claims in two queries."""
+    logger.info("Computing shared attribute counts...")
 
-    rows = session.run(
+    session.run(
+        """
+        MATCH (cl:Claim)-[:SHARES]->(e:Entity)<-[:SHARES]-(other:Claim)
+        WHERE cl <> other
+        WITH cl, count(DISTINCT e) AS cnt
+        SET cl.shared_attribute_count = cnt
+        """
+    )
+    session.run(
         """
         MATCH (cl:Claim)
-        RETURN cl.id AS id
-        ORDER BY cl.id
+        WHERE cl.shared_attribute_count IS NULL
+        SET cl.shared_attribute_count = 0
         """
     )
 
-    return [r["id"] for r in rows]
+    logger.info("Shared attribute counts complete")
 
 
-def _compute_features_for_batch(
-    tx,
-    claim_ids: List[str],
-    max_hops: int = DEFAULT_MAX_HOPS,
-) -> None:
+def _compute_per_claim_attorney_centrality(session: Session) -> None:
+    """Single query: propagate max attorney centrality to each Claim node."""
+    logger.info("Computing per-claim attorney centrality...")
 
-    logger.info(
-        "Computing graph features for %s claims",
-        len(claim_ids),
+    session.run(
+        """
+        MATCH (cl:Claim)
+        OPTIONAL MATCH (cl)<-[:FILED]-(c:Claimant)-[:REPRESENTED_BY]->(a:Attorney)
+        WITH cl, max(a.centrality) AS centrality
+        SET cl.attorney_centrality = CASE
+            WHEN centrality IS NULL THEN 0.0
+            ELSE centrality
+        END
+        """
     )
 
-    for claim_id in claim_ids:
+    logger.info("Per-claim attorney centrality complete")
 
-        # --------------------------------------------------------------
-        # Shared attribute count
-        # --------------------------------------------------------------
 
-        shared_row = tx.run(
-            """
-            MATCH (cl:Claim {id: $claim_id})
-                  -[:SHARES]->
-                  (e:Entity)
-                  <-[:SHARES]-
-                  (other:Claim)
+def _compute_hop_distances(session: Session, max_hops: int) -> None:
+    """
+    Flood-fill from all fraud seed nodes simultaneously.
 
-            WHERE other.id <> cl.id
+    One shortestPath query over all (fraud_seed, claim) pairs replaces the
+    original N-per-claim shortestPath loop.  Neo4j executes the traversal
+    server-side; Python sees a single round trip.
+    """
+    logger.info(
+        "Computing fraud hop distances (flood-fill, max_hops=%d)...", max_hops
+    )
 
-            RETURN count(DISTINCT e) AS shared_count
-            """,
-            claim_id=claim_id,
-        ).single()
+    session.run(
+        f"""
+        MATCH (f:Claim {{is_fraud: true}}), (cl:Claim)
+        WHERE f <> cl
+        MATCH p = shortestPath((cl)-[*..{max_hops}]-(f))
+        WITH cl, min(length(p)) AS hop_dist
+        SET cl.graph_hop_distance = hop_dist
+        """
+    )
 
-        shared_count = (
-            int(shared_row["shared_count"])
-            if shared_row and shared_row["shared_count"] is not None
-            else 0
-        )
+    # Claims with no path to any fraud seed get the sentinel value.
+    session.run(
+        f"""
+        MATCH (cl:Claim)
+        WHERE cl.graph_hop_distance IS NULL
+        SET cl.graph_hop_distance = {SENTINEL_HOP}
+        """
+    )
 
-        # --------------------------------------------------------------
-        # Attorney centrality
-        # --------------------------------------------------------------
-
-        attorney_row = tx.run(
-            """
-            MATCH (cl:Claim {id: $claim_id})
-
-            OPTIONAL MATCH
-                (cl)<-[:FILED]-(c:Claimant)
-                -[:REPRESENTED_BY]->
-                (a:Attorney)
-
-            RETURN max(a.centrality) AS centrality
-            """,
-            claim_id=claim_id,
-        ).single()
-
-        attorney_centrality = (
-            float(attorney_row["centrality"])
-            if attorney_row
-            and attorney_row["centrality"] is not None
-            else 0.0
-        )
-
-        # --------------------------------------------------------------
-        # Fraud hop distance
-        # --------------------------------------------------------------
-
-        hop_row = tx.run(
-            f"""
-            MATCH (c:Claim {{id: $claim_id}}),
-                  (f:Claim)
-
-            WHERE f.is_fraud = true
-              AND c.id <> f.id
-
-            MATCH p = shortestPath(
-                (c)-[*..{max_hops}]-(f)
-            )
-
-            RETURN min(length(p)) AS dist
-            """,
-            claim_id=claim_id,
-        ).single()
-
-        graph_hop_distance = (
-            int(hop_row["dist"])
-            if hop_row and hop_row["dist"] is not None
-            else SENTINEL_HOP
-        )
-
-        # --------------------------------------------------------------
-        # Persist features
-        # --------------------------------------------------------------
-
-        tx.run(
-            """
-            MATCH (cl:Claim {id: $claim_id})
-
-            SET cl.shared_attribute_count = $shared_count,
-                cl.graph_hop_distance = $graph_hop_distance,
-                cl.attorney_centrality = $attorney_centrality
-            """,
-            claim_id=claim_id,
-            shared_count=shared_count,
-            graph_hop_distance=graph_hop_distance,
-            attorney_centrality=attorney_centrality,
-        )
-
-    logger.info("Batch complete")
+    logger.info("Hop distance flood-fill complete")
 
 
 def compute_graph_features(
@@ -188,7 +141,7 @@ def compute_graph_features(
     neo4j_user: str,
     neo4j_password: str,
     max_hops: int = DEFAULT_MAX_HOPS,
-    batch_size: int = BATCH_SIZE,
+    batch_size: int = BATCH_SIZE,  # kept for API compatibility; no longer drives a loop
 ) -> pd.DataFrame:
 
     if not claims_path.exists():
@@ -223,37 +176,23 @@ def compute_graph_features(
                 "All hop distances will become sentinel."
             )
 
-        session.execute_write(
-            lambda tx: _compute_attorney_centrality(tx)
-        )
+        # 1. Attorney node centrality: 1 fetch + 1 UNWIND SET
+        session.execute_write(lambda tx: _compute_attorney_centrality(tx))
 
-        claim_ids = _get_all_claim_ids(session)
+        # 2. Shared attribute count: 2 queries (SET + NULL fill)
+        _compute_shared_attribute_counts(session)
 
-        total = len(claim_ids)
+        # 3. Per-claim attorney centrality: 1 query (reads Attorney.centrality set above)
+        _compute_per_claim_attorney_centrality(session)
 
-        logger.info("Found %s claims", total)
+        # 4. Hop distances: 1 flood-fill + 1 sentinel fill
+        _compute_hop_distances(session, max_hops)
 
-        for start in range(0, total, batch_size):
-
-            end = min(start + batch_size, total)
-
-            logger.info(
-                "Processing claims %s..%s / %s",
-                start + 1,
-                end,
-                total,
-            )
-
-            batch = claim_ids[start:end]
-
-            session.execute_write(
-                lambda tx, ids=batch, hops=max_hops:
-                _compute_features_for_batch(
-                    tx,
-                    ids,
-                    hops,
-                )
-            )
+        # 5. Read all enriched features back to Python
+        total = session.run(
+            "MATCH (cl:Claim) RETURN count(cl) AS cnt"
+        ).single()["cnt"]
+        logger.info("Reading features for %s claims", total)
 
         rows = session.run(
             """

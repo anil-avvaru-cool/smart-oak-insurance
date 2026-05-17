@@ -124,33 +124,48 @@ def build_graph_from_claims(
 
         _create_constraints(session)
 
+        # Cross-batch entity dedup: key -> entity_id (deterministic hash)
         entities: Dict[str, str] = {}
 
         def _process_batch(tx, batch_df: pd.DataFrame) -> None:
+            """
+            Build parameter lists for all node/relationship types, then fire
+            one UNWIND Cypher per type.  Reduces ~7-9*N round trips to 7-9
+            regardless of batch size.
+            """
+            claimants = []
+            claims = []
+            filed_rels = []
+            attorneys: Dict[str, str] = {}   # id -> name (dedup within batch)
+            rep_by_rels = []
+            vehicles: Dict[str, Dict] = {}   # vin -> props (dedup within batch)
+            involves_rels = []
+            new_entities = []
+            claimant_shares = []
+            claim_shares = []
 
             for _, claim in batch_df.iterrows():
 
                 claim_id = claim["claim_id"]
                 is_fraud = bool(claim["is_fraud"])
-
                 claimant_id = f"claimant_{claim_id}"
 
-                # ------------------------------------------------------
+                # ----------------------------------------------------------
                 # Shared entity reuse logic
-                # ------------------------------------------------------
+                # ----------------------------------------------------------
 
                 if is_fraud:
 
-                    if random.random() < 0.85:
-                        claimant_phone = random.choice(fraud_phone_pool)
-                    else:
-                        claimant_phone = faker.phone_number()
-
-                    if random.random() < 0.80:
-                        claimant_address = random.choice(fraud_address_pool)
-                    else:
-                        claimant_address = faker.address().replace("\n", ", ")
-
+                    claimant_phone = (
+                        random.choice(fraud_phone_pool)
+                        if random.random() < 0.85
+                        else faker.phone_number()
+                    )
+                    claimant_address = (
+                        random.choice(fraud_address_pool)
+                        if random.random() < 0.80
+                        else faker.address().replace("\n", ", ")
+                    )
                     attorney_id = (
                         random.choice(fraud_attorney_pool)
                         if claim["attorney_present"]
@@ -159,16 +174,16 @@ def build_graph_from_claims(
 
                 else:
 
-                    if random.random() < 0.03:
-                        claimant_phone = random.choice(shared_phone_pool)
-                    else:
-                        claimant_phone = faker.phone_number()
-
-                    if random.random() < 0.05:
-                        claimant_address = random.choice(shared_address_pool)
-                    else:
-                        claimant_address = faker.address().replace("\n", ", ")
-
+                    claimant_phone = (
+                        random.choice(shared_phone_pool)
+                        if random.random() < 0.03
+                        else faker.phone_number()
+                    )
+                    claimant_address = (
+                        random.choice(shared_address_pool)
+                        if random.random() < 0.05
+                        else faker.address().replace("\n", ", ")
+                    )
                     attorney_id = (
                         random.choice(legit_attorney_pool)
                         if (
@@ -182,113 +197,43 @@ def build_graph_from_claims(
                         )
                     )
 
-                claimant_name = faker.name()
-
-                # ------------------------------------------------------
-                # Claimant
-                # ------------------------------------------------------
-
-                tx.run(
-                    """
-                    MERGE (c:Claimant {id: $id})
-                    SET c.name = $name,
-                        c.phone = $phone,
-                        c.address = $address,
-                        c.is_fraud = $is_fraud
-                    """,
-                    id=claimant_id,
-                    name=claimant_name,
-                    phone=claimant_phone,
-                    address=claimant_address,
-                    is_fraud=is_fraud,
+                claimants.append(
+                    {
+                        "id": claimant_id,
+                        "name": faker.name(),
+                        "phone": claimant_phone,
+                        "address": claimant_address,
+                        "is_fraud": is_fraud,
+                    }
                 )
-
-                # ------------------------------------------------------
-                # Claim
-                # ------------------------------------------------------
-
-                tx.run(
-                    """
-                    MERGE (cl:Claim {id: $id})
-                    SET cl.is_fraud = $is_fraud,
-                        cl.state = $state
-                    """,
-                    id=claim_id,
-                    is_fraud=is_fraud,
-                    state=claim["state"],
+                claims.append(
+                    {
+                        "id": claim_id,
+                        "is_fraud": is_fraud,
+                        "state": claim["state"],
+                    }
                 )
-
-                # ------------------------------------------------------
-                # FILED relationship
-                # ------------------------------------------------------
-
-                tx.run(
-                    """
-                    MATCH (c:Claimant {id: $claimant_id}),
-                          (cl:Claim {id: $claim_id})
-
-                    MERGE (c)-[:FILED]->(cl)
-                    """,
-                    claimant_id=claimant_id,
-                    claim_id=claim_id,
+                filed_rels.append(
+                    {"claimant_id": claimant_id, "claim_id": claim_id}
                 )
-
-                # ------------------------------------------------------
-                # Attorney
-                # ------------------------------------------------------
 
                 if attorney_id:
-
-                    tx.run(
-                        """
-                        MERGE (a:Attorney {id: $id})
-                        ON CREATE SET a.name = $name
-                        """,
-                        id=attorney_id,
-                        name=faker.name(),
+                    if attorney_id not in attorneys:
+                        attorneys[attorney_id] = faker.name()
+                    rep_by_rels.append(
+                        {
+                            "claimant_id": claimant_id,
+                            "attorney_id": attorney_id,
+                        }
                     )
-
-                    tx.run(
-                        """
-                        MATCH (c:Claimant {id: $claimant_id}),
-                              (a:Attorney {id: $attorney_id})
-
-                        MERGE (c)-[:REPRESENTED_BY]->(a)
-                        """,
-                        claimant_id=claimant_id,
-                        attorney_id=attorney_id,
-                    )
-
-                # ------------------------------------------------------
-                # Vehicle — loaded from resolved entity layer (DEC-011)
-                # ------------------------------------------------------
 
                 vehicle_info = quote_to_vehicle.get(str(claim["quote_id"]))
                 if vehicle_info is not None:
-                    resolved_vin = vehicle_info["vin"]
-
-                    tx.run(
-                        """
-                        MERGE (v:Vehicle {vin: $vin})
-                        SET v.make = $make,
-                            v.model = $model,
-                            v.year = $year
-                        """,
-                        vin=resolved_vin,
-                        make=vehicle_info["make"],
-                        model=vehicle_info["model"],
-                        year=vehicle_info["year"],
-                    )
-
-                    tx.run(
-                        """
-                        MATCH (cl:Claim {id: $claim_id}),
-                              (v:Vehicle {vin: $vin})
-
-                        MERGE (cl)-[:INVOLVES]->(v)
-                        """,
-                        claim_id=claim_id,
-                        vin=resolved_vin,
+                    vin = vehicle_info["vin"]
+                    if vin not in vehicles:
+                        vehicles[vin] = vehicle_info
+                    involves_rels.append(
+                        {"claim_id": claim_id, "vin": vin}
                     )
                 else:
                     logger.warning(
@@ -296,59 +241,145 @@ def build_graph_from_claims(
                         claim["quote_id"],
                     )
 
-                # ------------------------------------------------------
-                # Shared entities
-                # ------------------------------------------------------
-
                 for attr, raw_value in [
                     ("phone", claimant_phone),
                     ("address", claimant_address),
                 ]:
-
                     key = f"{attr}:{_normalize_key(raw_value)}"
-
                     if key not in entities:
-
-                        entity_id = "e_" + hashlib.sha256(key.encode()).hexdigest()[:16]
-
-                        entities[key] = entity_id
-
-                        tx.run(
-                            """
-                            MERGE (e:Entity {id: $id})
-                            SET e.type = $type,
-                                e.value = $value
-                            """,
-                            id=entity_id,
-                            type=attr,
-                            value=raw_value,
+                        entity_id = (
+                            "e_"
+                            + hashlib.sha256(key.encode()).hexdigest()[:16]
                         )
-
+                        entities[key] = entity_id
                     entity_id = entities[key]
-
-                    tx.run(
-                        """
-                        MATCH (c:Claimant {id: $claimant_id}),
-                              (e:Entity {id: $entity_id})
-
-                        MERGE (c)-[:SHARES {type: $type}]->(e)
-                        """,
-                        claimant_id=claimant_id,
-                        entity_id=entity_id,
-                        type=attr,
+                    new_entities.append(
+                        {"id": entity_id, "type": attr, "value": raw_value}
+                    )
+                    claimant_shares.append(
+                        {
+                            "claimant_id": claimant_id,
+                            "entity_id": entity_id,
+                            "type": attr,
+                        }
+                    )
+                    claim_shares.append(
+                        {
+                            "claim_id": claim_id,
+                            "entity_id": entity_id,
+                            "type": attr,
+                        }
                     )
 
-                    tx.run(
-                        """
-                        MATCH (cl:Claim {id: $claim_id}),
-                              (e:Entity {id: $entity_id})
+            # --------------------------------------------------------------
+            # UNWIND writes — one Cypher per node/relationship type
+            # --------------------------------------------------------------
 
-                        MERGE (cl)-[:SHARES {type: $type}]->(e)
-                        """,
-                        claim_id=claim_id,
-                        entity_id=entity_id,
-                        type=attr,
-                    )
+            tx.run(
+                """
+                UNWIND $rows AS row
+                MERGE (c:Claimant {id: row.id})
+                SET c.name     = row.name,
+                    c.phone    = row.phone,
+                    c.address  = row.address,
+                    c.is_fraud = row.is_fraud
+                """,
+                rows=claimants,
+            )
+
+            tx.run(
+                """
+                UNWIND $rows AS row
+                MERGE (cl:Claim {id: row.id})
+                SET cl.is_fraud = row.is_fraud,
+                    cl.state    = row.state
+                """,
+                rows=claims,
+            )
+
+            tx.run(
+                """
+                UNWIND $rows AS row
+                MATCH (c:Claimant {id: row.claimant_id}),
+                      (cl:Claim   {id: row.claim_id})
+                MERGE (c)-[:FILED]->(cl)
+                """,
+                rows=filed_rels,
+            )
+
+            if attorneys:
+                tx.run(
+                    """
+                    UNWIND $rows AS row
+                    MERGE (a:Attorney {id: row.id})
+                    ON CREATE SET a.name = row.name
+                    """,
+                    rows=[{"id": k, "name": v} for k, v in attorneys.items()],
+                )
+                tx.run(
+                    """
+                    UNWIND $rows AS row
+                    MATCH (c:Claimant {id: row.claimant_id}),
+                          (a:Attorney {id: row.attorney_id})
+                    MERGE (c)-[:REPRESENTED_BY]->(a)
+                    """,
+                    rows=rep_by_rels,
+                )
+
+            if vehicles:
+                tx.run(
+                    """
+                    UNWIND $rows AS row
+                    MERGE (v:Vehicle {vin: row.vin})
+                    SET v.make  = row.make,
+                        v.model = row.model,
+                        v.year  = row.year
+                    """,
+                    rows=[
+                        {"vin": vin, **info}
+                        for vin, info in vehicles.items()
+                    ],
+                )
+                tx.run(
+                    """
+                    UNWIND $rows AS row
+                    MATCH (cl:Claim   {id:  row.claim_id}),
+                          (v:Vehicle  {vin: row.vin})
+                    MERGE (cl)-[:INVOLVES]->(v)
+                    """,
+                    rows=involves_rels,
+                )
+
+            if new_entities:
+                tx.run(
+                    """
+                    UNWIND $rows AS row
+                    MERGE (e:Entity {id: row.id})
+                    SET e.type  = row.type,
+                        e.value = row.value
+                    """,
+                    rows=new_entities,
+                )
+
+            tx.run(
+                """
+                UNWIND $rows AS row
+                MATCH (c:Claimant {id: row.claimant_id}),
+                      (e:Entity   {id: row.entity_id})
+                MERGE (c)-[:SHARES {type: row.type}]->(e)
+                """,
+                rows=claimant_shares,
+            )
+
+            tx.run(
+                """
+                UNWIND $rows AS row
+                MATCH (cl:Claim {id: row.claim_id}),
+                      (e:Entity  {id: row.entity_id})
+                MERGE (cl)-[:SHARES {type: row.type}]->(e)
+                """,
+                rows=claim_shares,
+            )
 
         total = len(claims_df)
 
