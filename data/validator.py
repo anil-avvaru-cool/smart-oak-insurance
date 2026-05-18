@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import pandas as pd
@@ -609,6 +610,13 @@ def _check_value_ranges_quote(features: dict, record_id: str) -> list[str]:
     return errs
 
 
+def _check_nan_in_features(features: dict, record_id: str) -> list[str]:
+    nan_keys = [k for k, v in features.items() if isinstance(v, float) and math.isnan(v)]
+    if nan_keys:
+        return [f"{record_id}: NaN values in features (should be null): {sorted(nan_keys)}"]
+    return []
+
+
 def _check_value_ranges_claim(features: dict, record_id: str) -> list[str]:
     errs: list[str] = []
     for col in ("policy_inception_days", "reporting_delay_days", "shared_attribute_count"):
@@ -661,6 +669,7 @@ def validate_offline_features(features_dir: Path | None = None) -> None:
     regulatory_errors: list[str] = []
     telematics_errors: list[str] = []
     range_errors: list[str] = []
+    nan_errors: list[str] = []
     version_mismatches = 0
 
     for snap_path in snapshot_files:
@@ -682,6 +691,8 @@ def validate_offline_features(features_dir: Path | None = None) -> None:
         record_id = snap["record_id"]
         features = snap["features"]
         state = snap.get("state", "")
+
+        nan_errors.extend(_check_nan_in_features(features, record_id))
 
         if record_type == "quote":
             schema_errors.extend(_check_feature_schema(features, _QUOTE_FEATURE_KEYS, record_id))
@@ -738,6 +749,15 @@ def validate_offline_features(features_dir: Path | None = None) -> None:
             print(f"  {_FAIL} ... and {len(telematics_errors) - 5} more telematics trio errors")
     else:
         print(f"  {_PASS} telematics trio invariant holds for all snapshots")
+
+    # NaN values
+    if nan_errors:
+        for err in nan_errors[:5]:
+            print(f"  {_FAIL} {err}")
+        if len(nan_errors) > 5:
+            print(f"  {_FAIL} ... and {len(nan_errors) - 5} more NaN errors")
+    else:
+        print(f"  {_PASS} no NaN values in feature snapshots (all nulls are JSON null)")
 
     # Value ranges
     if range_errors:

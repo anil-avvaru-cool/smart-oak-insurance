@@ -222,3 +222,4 @@ __marimo__/
 data/raw/
 data/processed/
 neo4jQueryResult.txt
+.claude/

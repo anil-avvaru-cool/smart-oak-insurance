@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -59,10 +60,21 @@ def build_claim_snapshot(claim_payload: dict, underwriting_features: dict | None
     )
 
 
+def _sanitize_nans(obj: Any) -> Any:
+    """Recursively replace float NaN with None so json.dumps produces valid JSON."""
+    if isinstance(obj, float) and math.isnan(obj):
+        return None
+    if isinstance(obj, dict):
+        return {k: _sanitize_nans(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_nans(v) for v in obj]
+    return obj
+
+
 def write_snapshot(snapshot: dict, output_dir: Path) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     file_path = output_dir / f"{snapshot['record_id']}.json"
-    file_path.write_text(json.dumps(snapshot, indent=2))
+    file_path.write_text(json.dumps(_sanitize_nans(snapshot), indent=2))
     return file_path
 
 
