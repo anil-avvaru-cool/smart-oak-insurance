@@ -38,10 +38,10 @@ Layer 3 — entity_vehicle.py                             (VIN decode, MSRP, ADA
     ↓
 Layer 4 — validator.py                                  (validates resolved entities + raw data)
     ↓
-Layer 5 — graph_builder.py                              (loads resolved entities as nodes/edges ONLY)
-          offline_pipeline.py                           (feature_definitions + resolved entities)
+Layer 5 — graph_builder.py                              (loads resolved entities as nodes/edges ONLY)          
     ↓
 Layer 6 — graph_features.py                             (queries Neo4j → enriches feature store)
+          offline_pipeline.py                           (feature_definitions + resolved entities)
     ↓
 Layer 7 — train_frequency.py + train_severity.py        (quotes, processed features)
           fraud_scoring/train.py                        (claims, processed + graph features)
@@ -97,6 +97,16 @@ Day 5   validator.py        — verify entity resolution (null VINs, dedup count
 
 Do not touch model training until `data/processed/` has clean output from the
 offline pipeline.
+
+## When Is the Offline Pipeline Used?
+
+The offline pipeline (`offline_pipeline.py`) runs in two distinct contexts:
+
+**1. Training data preparation** — batch computation over all historical records. It reads resolved entities from `data/entities/`, computes the full feature set, and writes `data/processed/quotes_features.parquet` and `claims_features.parquet` for model training.
+
+**2. Nightly batch enrichment** — pre-computing features for known entities (customers, vehicles, policies) and pushing them into the Redis online store, so live inference can retrieve them in under 10ms without recomputing on the fly.
+
+The offline pipeline is explicitly *not* used in the real-time sync path (<100ms). At FNOL time, the online store (Redis) serves pre-computed features. Entity resolution is also a pre-computation step completed offline — it does not run inside either inference path.
 
 ---
 

@@ -53,6 +53,14 @@ record is **frozen at quote time** and immutably stored with a timestamp.
 All inputs are resolved entities from Stage 0 — raw generator output is not
 fed directly into the feature store pipeline.
 
+### Why Key-Value Features Are Called a "Feature Vector"
+
+Despite being stored as named key-value pairs, the term "vector" refers to what happens **at model input time**, not storage time.
+
+When the feature store assembles the record for scoring, it selects the values in a **fixed, ordered sequence** — dropping the keys — producing a numeric array like `[712, 2, 0.31, null, 28000, ...]`. That ordered array *is* the vector. The key-value format is just a human-readable, audit-friendly representation of the same data. XGBoost and other models only see the ordered numeric sequence.
+
+The architecture stores features as named pairs precisely *because* the keys are needed for the audit trail and regulatory replay — but the model consumes a vector.
+
 ### Structure
 Each record is stored as named key-value pairs — not raw vectors:
 
