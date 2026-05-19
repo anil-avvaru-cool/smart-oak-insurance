@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 FeatureVector = dict[str, Any]
@@ -8,11 +9,15 @@ FEATURE_STORE_VERSION = "v1.0.0"
 CREDIT_RESTRICTED_STATES = {"CA", "MA", "MI", "HI"}
 
 
+def _nan_to_none(v: Any) -> Any:
+    return None if (isinstance(v, float) and math.isnan(v)) else v
+
+
 def build_telematics_features(payload: dict) -> FeatureVector:
-    distraction_score = payload.get("telematics_distraction_score")
-    hard_brake_rate = payload.get("telematics_hard_brake_rate")
-    crash_match = payload.get("telematics_crash_match")
-    commute_entropy = payload.get("telematics_commute_entropy")
+    distraction_score = _nan_to_none(payload.get("telematics_distraction_score"))
+    hard_brake_rate = _nan_to_none(payload.get("telematics_hard_brake_rate"))
+    crash_match = _nan_to_none(payload.get("telematics_crash_match"))
+    commute_entropy = _nan_to_none(payload.get("telematics_commute_entropy"))
     available = any(v is not None for v in (distraction_score, hard_brake_rate, crash_match, commute_entropy))
     return {
         "telematics_distraction_score": distraction_score,

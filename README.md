@@ -41,6 +41,9 @@ Docker commands:
 ```bash
 docker compose up -d --build
 docker compose up -d neo4j redis
+sudo rm -rf ./data/processed
+sudo rm -rf ./data/raw
+
 docker compose run --rm app python main.py --generate-data
 docker compose run --rm app python main.py --resolve-entities
 
