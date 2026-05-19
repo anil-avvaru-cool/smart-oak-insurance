@@ -40,10 +40,10 @@ Generated outputs are written to `data/raw/quotes.parquet`, `data/raw/claims.par
 Docker commands:
 ```bash
 docker compose up -d --build
-#Run the generator inside Docker:
+docker compose up -d neo4j redis
 docker compose run --rm app python main.py --generate-data
 docker compose run --rm app python main.py --resolve-entities
-docker compose up -d neo4j redis
+
 # Delete existing and start from scratch
 docker compose run --rm app python main.py --build-graph
 docker compose run --rm app python main.py --compute-graph-features

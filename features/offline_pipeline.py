@@ -81,7 +81,12 @@ def write_snapshot(snapshot: dict, output_dir: Path) -> Path:
 def _to_native(val: Any) -> Any:
     """Convert numpy scalars to native Python types for JSON serialization."""
     if hasattr(val, "item"):
-        return val.item()
+        native = val.item()
+        if isinstance(native, float) and math.isnan(native):
+            return None
+        return native
+    if isinstance(val, float) and math.isnan(val):
+        return None
     return val
 
 
