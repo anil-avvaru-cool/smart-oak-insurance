@@ -46,6 +46,7 @@ def build_quote_feature_vector(quote_payload: dict) -> FeatureVector:
     vehicle_age_years = int(quote_payload.get("vehicle_age_years", 0) or 0)
 
     features: FeatureVector = {
+        "vin": quote_payload.get("vin"),
         "credit_score": quote_payload.get("credit_score"),
         "prior_loss_frequency": float(quote_payload.get("prior_loss_frequency", 0.0) or 0.0),
         "prior_loss_severity_avg": float(quote_payload.get("prior_loss_severity_avg", 0.0) or 0.0),

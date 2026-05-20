@@ -25,6 +25,7 @@ def resolve_vehicles() -> pd.DataFrame:
             "msrp": float(row["vehicle_msrp"]),
             "horsepower": float(row["vehicle_power"]),
             "adas_score": float(row["vehicle_adas_score"]),
+            "vehicle_age_years": int(row["vehicle_age_years"]),
         })
 
     vehicles_df = pd.DataFrame(vehicles)

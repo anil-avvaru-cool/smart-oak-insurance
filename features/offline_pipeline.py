@@ -91,6 +91,29 @@ def _to_native(val: Any) -> Any:
     return val
 
 
+def _load_vehicle_lookup(quotes_path: Path) -> dict[str, dict]:
+    """Load resolved vehicle entities keyed by quote_id."""
+    vehicles_path = quotes_path.parent / "entities" / "vehicles.parquet"
+    if not vehicles_path.exists():
+        raise FileNotFoundError(
+            f"Resolved vehicle entities not found at {vehicles_path}. "
+            "Run --resolve-entities before --run-offline-pipeline."
+        )
+    vehicles_df = pd.read_parquet(vehicles_path)
+    return {str(r["quote_id"]): r.to_dict() for _, r in vehicles_df.iterrows()}
+
+
+def _merge_vehicle_entity(payload: dict, vehicle: dict) -> dict:
+    """Override raw quote vehicle fields with resolved entity values."""
+    payload["vehicle_msrp"] = vehicle["msrp"]
+    payload["vehicle_power"] = vehicle["horsepower"]
+    payload["vehicle_adas_score"] = vehicle["adas_score"]
+    # vehicle_age_years added to entity resolver; fall back to quote column for older parquets
+    payload["vehicle_age_years"] = vehicle.get("vehicle_age_years", payload.get("vehicle_age_years", 0))
+    payload["vin"] = vehicle["vin"]
+    return payload
+
+
 def run_offline_pipeline(
     quotes_path: Path,
     claims_path: Path,
@@ -99,8 +122,9 @@ def run_offline_pipeline(
 ) -> tuple[int, int]:
     """Batch-process all quotes and claims into feature snapshots.
 
-    Pass 1 — quotes: builds feature vectors, writes JSON snapshots, pushes to online
-    store, and indexes underwriting features by quote_id for cross-platform linking.
+    Pass 1 — quotes: joins resolved vehicle entities (Stage 0), builds feature
+    vectors, writes JSON snapshots, pushes to online store, and indexes
+    underwriting features by quote_id for cross-platform linking.
 
     Pass 2 — claims: joins each claim to its underwriting context via quote_id
     (the shared data spine), builds claim feature vectors, writes snapshots.
@@ -109,15 +133,19 @@ def run_offline_pipeline(
     """
     quotes_df = pd.read_parquet(quotes_path)
     claims_df = pd.read_parquet(claims_path)
+    vehicle_lookup = _load_vehicle_lookup(quotes_path)
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Pass 1: quotes → build underwriting feature index keyed by quote_id
+    # Pass 1: quotes → merge entity fields, build underwriting feature index keyed by quote_id
     underwriting_index: dict[str, dict] = {}
     quotes_written = 0
 
     for _, row in quotes_df.iterrows():
         payload = {k: _to_native(v) for k, v in row.items()}
+        vehicle = vehicle_lookup.get(str(row["quote_id"]))
+        if vehicle:
+            payload = _merge_vehicle_entity(payload, vehicle)
         snapshot = build_quote_snapshot(payload)
         write_snapshot(snapshot, output_dir)
         if online_store is not None:
