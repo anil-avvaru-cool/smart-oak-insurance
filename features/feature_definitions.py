@@ -7,6 +7,7 @@ FeatureVector = dict[str, Any]
 
 FEATURE_STORE_VERSION = "v1.0.0"
 CREDIT_RESTRICTED_STATES = {"CA", "MA", "MI", "HI"}
+GRAPH_HOP_SENTINEL = 999  # written by graph_features.py when no fraud path found within 6 hops
 
 
 def _nan_to_none(v: Any) -> Any:
@@ -79,7 +80,7 @@ def build_claim_feature_vector(claim_payload: dict, underwriting_features: dict 
         "attorney_present": bool(claim_payload.get("attorney_present", False)),
         "submission_hour": int(claim_payload.get("submission_hour", 0) or 0),
         "claimant_count": int(claim_payload.get("claimant_count", 1) or 1),
-        "graph_hop_distance": int(claim_payload.get("graph_hop_distance", 0) or 0),
+        "graph_hop_distance": None if (_raw_hop := claim_payload.get("graph_hop_distance")) is None or int(_raw_hop) == GRAPH_HOP_SENTINEL else int(_raw_hop),
         "shared_attribute_count": int(claim_payload.get("shared_attribute_count", 0) or 0),
         "attorney_centrality_score": float(claim_payload.get("attorney_centrality_score", 0.0) or 0.0),
         "narrative_inconsistency_score": float(claim_payload.get("narrative_inconsistency_score", 0.0) or 0.0),
@@ -91,5 +92,7 @@ def build_claim_feature_vector(claim_payload: dict, underwriting_features: dict 
         "submission_channel": claim_payload.get("submission_channel", "unknown"),
     }
 
-    features.update(build_telematics_features(claim_payload))
+    # telematics_enrolled lives in quotes, not claims — pull from underwriting context
+    telem_enrolled = claim_payload.get("telematics_enrolled", underwriting_features.get("telematics_enrolled", False))
+    features.update(build_telematics_features({**claim_payload, "telematics_enrolled": telem_enrolled}))
     return features

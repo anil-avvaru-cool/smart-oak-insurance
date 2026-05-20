@@ -42,10 +42,11 @@ Docker commands:
 docker compose up -d --build
 docker compose up -d neo4j redis
 sudo rm -rf ./data/raw ./data/processed
+# Run all in single command
+docker compose run --rm app python main.py --generate-data --resolve-entities --build-graph --compute-graph-features --run-offline-pipeline --validate-data
 
 docker compose run --rm app python main.py --generate-data
 docker compose run --rm app python main.py --resolve-entities
-
 # Delete existing and start from scratch
 docker compose run --rm app python main.py --build-graph
 docker compose run --rm app python main.py --compute-graph-features

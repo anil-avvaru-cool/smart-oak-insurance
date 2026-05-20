@@ -122,7 +122,10 @@ def run_offline_pipeline(
         write_snapshot(snapshot, output_dir)
         if online_store is not None:
             online_store.set_features(snapshot["record_id"], snapshot["features"])
-        underwriting_index[str(row["quote_id"])] = snapshot["features"]
+        underwriting_index[str(row["quote_id"])] = {
+            **snapshot["features"],
+            "telematics_enrolled": payload.get("telematics_enrolled", False),
+        }
         quotes_written += 1
 
     # Pass 2: claims → join underwriting context via quote_id (shared data spine)

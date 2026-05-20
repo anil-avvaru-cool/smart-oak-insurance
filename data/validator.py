@@ -629,6 +629,8 @@ def _check_value_ranges_claim(features: dict, record_id: str) -> list[str]:
     hop = features.get("graph_hop_distance")
     if hop is not None and int(hop) < 0:
         errs.append(f"{record_id}: graph_hop_distance={hop} is negative")
+    if hop is not None and int(hop) == 999:
+        errs.append(f"{record_id}: graph_hop_distance=999 sentinel must be converted to null by feature builder")
     return errs
 
 
@@ -791,6 +793,17 @@ def validate_offline_features(features_dir: Path | None = None) -> None:
             print(f"  {_WARN} {spine_orphans} claim snapshots have null risk_score_at_issuance (no underwriting context joined)")
         else:
             print(f"  {_PASS} all claim snapshots have risk_score_at_issuance from underwriting context")
+
+    # telematics_enrolled_but_missing must be non-zero across claims — if it's always
+    # False, telematics_enrolled was not propagated from the underwriting context.
+    if claim_snaps:
+        enrolled_missing_count = sum(
+            1 for s in claim_snaps if s["features"].get("telematics_enrolled_but_missing") is True
+        )
+        if enrolled_missing_count == 0:
+            print(f"  {_FAIL} no claim snapshots have telematics_enrolled_but_missing=True (underwriting telematics_enrolled not propagated)")
+        else:
+            print(f"  {_PASS} {enrolled_missing_count} claim snapshots have telematics_enrolled_but_missing=True")
 
 
 def validate_data(quotes_df: pd.DataFrame | None = None, claims_df: pd.DataFrame | None = None,

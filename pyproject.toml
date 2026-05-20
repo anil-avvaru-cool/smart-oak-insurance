@@ -30,3 +30,8 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["features*", "data*"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
