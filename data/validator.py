@@ -655,9 +655,9 @@ def validate_offline_features(features_dir: Path | None = None) -> None:
         print(f"     FIX: Run 'python main.py --run-offline-pipeline' to generate snapshots")
         return
 
-    snapshot_files = sorted(features_dir.glob("*.json"))
+    snapshot_files = sorted(features_dir.glob("*/*.json"))
     if not snapshot_files:
-        print(f"  {_SKIP} no snapshot files found in {features_dir}")
+        print(f"  {_SKIP} no snapshot files found in {features_dir}/quotes/ or {features_dir}/claims/")
         return
 
     print(f"  loading {len(snapshot_files)} snapshots from {features_dir}")

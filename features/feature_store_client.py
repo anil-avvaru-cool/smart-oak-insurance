@@ -17,8 +17,8 @@ class FeatureStoreClient:
     def save_snapshot(self, snapshot: dict[str, Any]) -> Path:
         return write_snapshot(snapshot, self.offline_dir)
 
-    def load_snapshot(self, record_id: str) -> dict[str, Any] | None:
-        path = self.offline_dir / f"{record_id}.json"
+    def load_snapshot(self, record_id: str, record_type: str) -> dict[str, Any] | None:
+        path = self.offline_dir / f"{record_type}s" / f"{record_id}.json"
         if not path.exists():
             return None
         return json.loads(path.read_text())

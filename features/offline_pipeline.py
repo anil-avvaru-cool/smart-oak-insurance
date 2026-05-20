@@ -72,8 +72,9 @@ def _sanitize_nans(obj: Any) -> Any:
 
 
 def write_snapshot(snapshot: dict, output_dir: Path) -> Path:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    file_path = output_dir / f"{snapshot['record_id']}.json"
+    subdir = output_dir / f"{snapshot['record_type']}s"
+    subdir.mkdir(parents=True, exist_ok=True)
+    file_path = subdir / f"{snapshot['record_id']}.json"
     file_path.write_text(json.dumps(_sanitize_nans(snapshot), indent=2))
     return file_path
 

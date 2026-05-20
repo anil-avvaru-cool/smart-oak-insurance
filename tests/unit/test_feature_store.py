@@ -92,14 +92,14 @@ def test_feature_store_client_persists_offline_and_online() -> None:
 
         snapshot = client.save_quote(quote_payload)
         assert snapshot["feature_store_version"] == FEATURE_STORE_VERSION
-        assert (offline_dir / "Q-123.json").exists()
+        assert (offline_dir / "quotes" / "Q-123.json").exists()
 
         stored = client.get_online_features("Q-123")
         assert stored is not None
         assert stored["state"] == "NV"
         assert stored["telematics_available"] is False
 
-        loaded = client.load_snapshot("Q-123")
+        loaded = client.load_snapshot("Q-123", "quote")
         assert loaded is not None
         assert loaded["record_id"] == "Q-123"
         assert loaded["record_type"] == "quote"
