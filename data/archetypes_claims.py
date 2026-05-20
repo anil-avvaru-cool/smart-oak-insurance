@@ -19,6 +19,8 @@ class ClaimArchetype:
     narrative_complexity_mean: float
     device_fingerprint_match_prob: float
     ip_geolocation_delta_mean: float
+    loss_mean_usd: float  # Gamma mean for incurred_loss_usd (Stage 2b severity target)
+    loss_cv: float        # coefficient of variation — sets Gamma shape (shape = 1/cv²)
 
 
 CLAIM_ARCHETYPES = [
@@ -37,6 +39,8 @@ CLAIM_ARCHETYPES = [
         narrative_complexity_mean=0.60,
         device_fingerprint_match_prob=0.20,
         ip_geolocation_delta_mean=15.0,
+        loss_mean_usd=28_000,
+        loss_cv=1.2,
     ),
     ClaimArchetype(
         name="Soft tissue exaggeration",
@@ -53,6 +57,8 @@ CLAIM_ARCHETYPES = [
         narrative_complexity_mean=0.68,
         device_fingerprint_match_prob=0.30,
         ip_geolocation_delta_mean=8.0,
+        loss_mean_usd=16_000,
+        loss_cv=0.8,
     ),
     ClaimArchetype(
         name="VIN cloning",
@@ -69,6 +75,8 @@ CLAIM_ARCHETYPES = [
         narrative_complexity_mean=0.44,
         device_fingerprint_match_prob=0.05,
         ip_geolocation_delta_mean=12.0,
+        loss_mean_usd=38_000,
+        loss_cv=0.7,
     ),
     ClaimArchetype(
         name="Inflated repair estimate",
@@ -85,6 +93,8 @@ CLAIM_ARCHETYPES = [
         narrative_complexity_mean=0.70,
         device_fingerprint_match_prob=0.40,
         ip_geolocation_delta_mean=10.0,
+        loss_mean_usd=11_500,
+        loss_cv=0.9,
     ),
     ClaimArchetype(
         name="Phantom passenger",
@@ -101,6 +111,8 @@ CLAIM_ARCHETYPES = [
         narrative_complexity_mean=0.75,
         device_fingerprint_match_prob=0.25,
         ip_geolocation_delta_mean=20.0,
+        loss_mean_usd=22_000,
+        loss_cv=1.1,
     ),
     ClaimArchetype(
         name="Coordinated fraud ring",
@@ -117,6 +129,8 @@ CLAIM_ARCHETYPES = [
         narrative_complexity_mean=0.72,
         device_fingerprint_match_prob=0.22,
         ip_geolocation_delta_mean=18.0,
+        loss_mean_usd=35_000,
+        loss_cv=1.3,
     ),
     ClaimArchetype(
         name="Medical billing inflation",
@@ -133,6 +147,8 @@ CLAIM_ARCHETYPES = [
         narrative_complexity_mean=0.64,
         device_fingerprint_match_prob=0.32,
         ip_geolocation_delta_mean=12.0,
+        loss_mean_usd=25_000,
+        loss_cv=1.0,
     ),
     ClaimArchetype(
         name="Legitimate fender-bender",
@@ -149,6 +165,8 @@ CLAIM_ARCHETYPES = [
         narrative_complexity_mean=0.25,
         device_fingerprint_match_prob=0.95,
         ip_geolocation_delta_mean=2.5,
+        loss_mean_usd=3_800,
+        loss_cv=0.6,
     ),
     ClaimArchetype(
         name="Legitimate major accident",
@@ -165,6 +183,8 @@ CLAIM_ARCHETYPES = [
         narrative_complexity_mean=0.40,
         device_fingerprint_match_prob=0.98,
         ip_geolocation_delta_mean=1.2,
+        loss_mean_usd=19_500,
+        loss_cv=0.8,
     ),
     ClaimArchetype(
         name="Total loss misrepresentation",
@@ -181,5 +201,7 @@ CLAIM_ARCHETYPES = [
         narrative_complexity_mean=0.69,
         device_fingerprint_match_prob=0.28,
         ip_geolocation_delta_mean=14.0,
+        loss_mean_usd=42_000,
+        loss_cv=0.6,
     ),
 ]

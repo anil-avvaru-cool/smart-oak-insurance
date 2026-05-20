@@ -30,6 +30,15 @@ def validate_quote_dataset(quotes_df: pd.DataFrame) -> None:
         print(f"  {_FAIL} credit score out of range")
     else:
         print(f"  {_PASS} credit score range looks healthy")
+    if "claim_occurred" in quotes_df.columns:
+        claim_rate = quotes_df["claim_occurred"].mean()
+        print(f"  claim_occurred rate: {claim_rate:.2%} (expected 3%–20% by archetype mix)")
+        if claim_rate < 0.02 or claim_rate > 0.25:
+            print(f"  {_WARN} claim_occurred rate outside expected range — check archetype annual_claim_rate values")
+        else:
+            print(f"  {_PASS} claim_occurred rate is plausible")
+    else:
+        print(f"  {_WARN} claim_occurred column missing (run --generate-data to regenerate)")
 
 
 def validate_claim_dataset(claims_df: pd.DataFrame) -> None:
@@ -49,6 +58,24 @@ def validate_claim_dataset(claims_df: pd.DataFrame) -> None:
         print(f"  {_FAIL} negative reporting_delay_days found")
     else:
         print(f"  {_PASS} reporting delay values are valid")
+    if "incurred_loss_usd" in claims_df.columns:
+        loss = claims_df["incurred_loss_usd"]
+        null_count = loss.isna().sum()
+        if null_count:
+            print(f"  {_FAIL} {null_count} null incurred_loss_usd values (must be populated for all claims)")
+        elif (loss <= 0).any():
+            print(f"  {_FAIL} non-positive incurred_loss_usd values found")
+        else:
+            fraud_mean = claims_df.loc[claims_df["is_fraud"] == True, "incurred_loss_usd"].mean()
+            legit_mean = claims_df.loc[claims_df["is_fraud"] == False, "incurred_loss_usd"].mean()
+            print(f"  incurred_loss_usd: mean=${loss.mean():,.0f}, median=${loss.median():,.0f}, p95=${loss.quantile(0.95):,.0f}")
+            print(f"  incurred_loss_usd: fraud mean=${fraud_mean:,.0f}, legit mean=${legit_mean:,.0f}")
+            if fraud_mean <= legit_mean:
+                print(f"  {_WARN} fraud mean loss not higher than legit — check claim archetype loss parameters")
+            else:
+                print(f"  {_PASS} fraud claims have higher mean incurred_loss_usd than legitimate claims")
+    else:
+        print(f"  {_WARN} incurred_loss_usd column missing (run --generate-data to regenerate)")
 
 
 def validate_graph_features(claims_df: pd.DataFrame) -> None:
@@ -351,6 +378,7 @@ def _check_fraud_signal_directions(claims_df: pd.DataFrame) -> None:
         ("narrative_complexity_score", "fraud_gt"),
         ("ip_geolocation_delta_miles", "fraud_gt"),
         ("prior_claims_count", "fraud_gt"),
+        ("incurred_loss_usd", "fraud_gt"),
         ("device_fingerprint_match", "fraud_lt"),
         ("policy_inception_days", "fraud_lt"),
         ("telematics_available", "fraud_lt"),
@@ -390,6 +418,7 @@ def _check_fraud_feature_correlations(claims_df: pd.DataFrame) -> None:
         "narrative_inconsistency_score": +1,
         "ip_geolocation_delta_miles": +1,
         "prior_claims_count": +1,
+        "incurred_loss_usd": +1,
         "device_fingerprint_match": -1,
         "policy_inception_days": -1,
         "telematics_available": -1,

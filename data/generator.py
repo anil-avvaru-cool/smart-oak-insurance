@@ -18,6 +18,13 @@ def _bounded_normal(rng: np.random.Generator, mean: float, std: float, minimum: 
     return float(np.clip(rng.normal(mean, std), minimum, maximum))
 
 
+def _sample_gamma_loss(rng: np.random.Generator, mean_usd: float, cv: float) -> float:
+    """Sample incurred loss from Gamma(shape=1/cv², scale=mean*cv²). Clamped to [$500, $250k]."""
+    shape = 1.0 / (cv ** 2)
+    scale = mean_usd * (cv ** 2)
+    return float(np.clip(rng.gamma(shape, scale), 500.0, 250_000.0))
+
+
 def _assign_policy_tier(risk_score: float) -> str:
     if risk_score < 0.25:
         return "platinum"
@@ -96,6 +103,8 @@ def generate_quotes(seed: int = RANDOM_SEED) -> pd.DataFrame:
             }
             quote_payload["risk_score_at_issuance"] = _score_quote(quote_payload)
             quote_payload["policy_tier_at_issuance"] = _assign_policy_tier(quote_payload["risk_score_at_issuance"])
+            quote_payload["archetype_name"] = archetype.name
+            quote_payload["claim_occurred"] = bool(rng.random() < archetype.annual_claim_rate)
             records.append(quote_payload)
 
     quotes_df = pd.DataFrame(records)
@@ -141,6 +150,8 @@ def generate_claims(quotes_df: pd.DataFrame, seed: int = RANDOM_SEED + 1) -> pd.
             "policy_tier_at_issuance": quote["policy_tier_at_issuance"],
             "is_fraud": is_fraud,
             "ip_geolocation_delta_miles": float(np.clip(rng.normal(archetype.ip_geolocation_delta_mean, 5.0), 0.0, 100.0)),
+            "incurred_loss_usd": _sample_gamma_loss(rng, archetype.loss_mean_usd, archetype.loss_cv),
+            "archetype_name": archetype.name,
         }
         records.append(claim_payload)
 

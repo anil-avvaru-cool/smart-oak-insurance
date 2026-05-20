@@ -32,7 +32,8 @@ def main() -> None:
     if args.generate_data:
         quotes_df, claims_df = generate_data()
         print(f"Generated {len(quotes_df)} quotes and {len(claims_df)} claims")
-        return
+        if not (args.resolve_entities or args.reset_graph or args.build_graph or args.compute_graph_features or args.run_offline_pipeline or args.validate_data):
+            return
 
     if args.resolve_entities:
         resolve_vehicles()
