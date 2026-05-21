@@ -33,9 +33,24 @@ def train(quotes_path: Path, claims_path: Path, output_dir: Path) -> dict:
     X = df[QUOTE_FEATURE_COLS]
     y = df[TARGET]
 
-    X_train, X_test, y_train, y_test = train_test_split(
+    # Severity model watch-out: ~1,600 claim records at 20K quotes / 8% claim rate.
+    # Use 60/20/20 (not 80/20) so the val set catches Gamma divergence early.
+    # If train_rows < 960, bump quotes volume to 50K before tuning hyperparameters.
+    X_trainval, X_test, y_trainval, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42
     )
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_trainval, y_trainval, test_size=0.25, random_state=42  # 0.25 × 0.8 = 0.2
+    )
+
+    if len(X_train) < 960:
+        import warnings
+        warnings.warn(
+            f"Severity model has only {len(X_train)} training rows "
+            f"(expected ≥960). Bump quotes volume to 50K before adjusting "
+            f"hyperparameters — the bottleneck is data, not the model.",
+            stacklevel=2,
+        )
 
     model = xgb.XGBRegressor(
         objective="reg:gamma",
@@ -47,9 +62,14 @@ def train(quotes_path: Path, claims_path: Path, output_dir: Path) -> dict:
         tree_method="hist",
         random_state=42,
         eval_metric="gamma-deviance",
+        early_stopping_rounds=30,
         verbosity=0,
     )
-    model.fit(X_train, y_train, eval_set=[(X_test, y_test)], verbose=False)
+    model.fit(
+        X_train, y_train,
+        eval_set=[(X_val, y_val)],
+        verbose=False,
+    )
 
     preds = model.predict(X_test)
     mae = float(np.mean(np.abs(y_test.values - preds)))
@@ -73,7 +93,11 @@ def train(quotes_path: Path, claims_path: Path, output_dir: Path) -> dict:
         "mae_usd": round(mae, 2),
         "rmse_usd": round(rmse, 2),
         "mape": round(mape, 4),
-        "train_rows": len(df),
+        "train_rows": len(X_train),
+        "val_rows": len(X_val),
+        "test_rows": len(X_test),
+        "best_iteration": int(model.best_iteration),
+        "low_data_warning": len(X_train) < 960,
         "target_mean_usd": round(float(y.mean()), 2),
         "feature_importance_pct": feature_importance_pct,
     }
