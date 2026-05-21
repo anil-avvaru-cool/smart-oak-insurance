@@ -83,6 +83,16 @@ def train(quotes_path: Path, output_dir: Path) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
     model.save_model(output_dir / "frequency_model.json")
 
+    raw_importance = model.get_booster().get_score(importance_type="gain")
+    total_gain = sum(raw_importance.values()) or 1.0
+    feature_importance_pct = dict(
+        sorted(
+            {f: round(raw_importance.get(f, 0.0) / total_gain * 100, 2) for f in QUOTE_FEATURE_COLS}.items(),
+            key=lambda x: x[1],
+            reverse=True,
+        )
+    )
+
     metrics = {
         "auc": round(auc, 4),
         "gini": round(gini, 4),
@@ -90,6 +100,7 @@ def train(quotes_path: Path, output_dir: Path) -> dict:
         "scale_pos_weight": round(scale_pos_weight, 2),
         "train_positives": pos,
         "train_negatives": neg,
+        "feature_importance_pct": feature_importance_pct,
     }
     (output_dir / "frequency_metrics.json").write_text(json.dumps(metrics, indent=2))
     (output_dir / "frequency_features.json").write_text(

@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
+import shap
 import xgboost as xgb
 
 from .train_frequency import QUOTE_FEATURE_COLS, prepare_features
@@ -24,6 +26,7 @@ class HurdleModel:
         self._sev = xgb.XGBRegressor()
         self._sev.load_model(model_dir / "severity_model.json")
         self._model_dir = model_dir
+        self._freq_explainer: shap.TreeExplainer | None = None
 
     def score(self, df: pd.DataFrame) -> np.ndarray:
         """Return risk_score = P(claim) × E[cost | claim] for each row."""
@@ -41,6 +44,41 @@ class HurdleModel:
             {"p_claim": p_claim, "e_cost_usd": e_cost, "risk_score": p_claim * e_cost},
             index=df.index,
         )
+
+    def explain(self, df: pd.DataFrame, top_n: int = 5) -> list[list[dict[str, Any]]]:
+        """Return per-row SHAP reason codes from the frequency sub-model.
+
+        Each entry is a list of up to *top_n* dicts sorted by absolute SHAP
+        contribution descending::
+
+            [{"feature": "prior_loss_frequency", "shap_pct": 34.1}, ...]
+
+        SHAP values are in log-odds space (frequency model output); percentages
+        are computed from absolute contributions so direction is preserved in the
+        sign of shap_pct (positive = raises P(claim), negative = lowers it).
+        """
+        if self._freq_explainer is None:
+            self._freq_explainer = shap.TreeExplainer(self._freq)
+
+        X = prepare_features(df)[QUOTE_FEATURE_COLS]
+        shap_values = self._freq_explainer.shap_values(X)  # shape (n, n_features)
+
+        results: list[list[dict[str, Any]]] = []
+        for row_shap in shap_values:
+            abs_total = float(np.abs(row_shap).sum()) or 1.0
+            ranked = sorted(
+                enumerate(row_shap), key=lambda x: abs(x[1]), reverse=True
+            )[:top_n]
+            results.append(
+                [
+                    {
+                        "feature": QUOTE_FEATURE_COLS[i],
+                        "shap_pct": round(float(v) / abs_total * 100, 1),
+                    }
+                    for i, v in ranked
+                ]
+            )
+        return results
 
 
 def evaluate(quotes_path: Path, model_dir: Path) -> dict:

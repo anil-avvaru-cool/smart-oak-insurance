@@ -139,3 +139,93 @@ def test_evaluate_returns_gini_and_distribution(tmp_path):
     assert "hurdle_gini" in metrics
     assert "risk_score_mean" in metrics
     assert metrics["risk_score_p95"] >= metrics["risk_score_p50"]
+
+
+import json as _json
+
+
+def test_frequency_metrics_include_feature_importance(tmp_path):
+    quotes = _make_quotes()
+    quotes.to_parquet(tmp_path / "quotes.parquet")
+
+    train_frequency(tmp_path / "quotes.parquet", tmp_path)
+
+    metrics = _json.loads((tmp_path / "frequency_metrics.json").read_text())
+    assert "feature_importance_pct" in metrics
+    imp = metrics["feature_importance_pct"]
+    assert set(imp.keys()) == set(QUOTE_FEATURE_COLS)
+    assert abs(sum(imp.values()) - 100.0) < 0.5  # sums to ~100%
+    assert all(v >= 0 for v in imp.values())
+    vals = list(imp.values())
+    assert vals == sorted(vals, reverse=True)
+
+
+def test_severity_metrics_include_feature_importance(tmp_path):
+    quotes = _make_quotes()
+    claims = _make_claims(quotes)
+    quotes.to_parquet(tmp_path / "quotes.parquet")
+    claims.to_parquet(tmp_path / "claims.parquet")
+
+    from underwriting.models.risk_scoring.train_severity import train as train_severity
+
+    train_severity(tmp_path / "quotes.parquet", tmp_path / "claims.parquet", tmp_path)
+
+    metrics = _json.loads((tmp_path / "severity_metrics.json").read_text())
+    assert "feature_importance_pct" in metrics
+    imp = metrics["feature_importance_pct"]
+    assert set(imp.keys()) == set(QUOTE_FEATURE_COLS)
+    assert abs(sum(imp.values()) - 100.0) < 0.5
+    vals = list(imp.values())
+    assert vals == sorted(vals, reverse=True)
+
+
+def test_hurdle_model_explain_shape_and_structure(tmp_path):
+    quotes = _make_quotes()
+    claims = _make_claims(quotes)
+    quotes.to_parquet(tmp_path / "quotes.parquet")
+    claims.to_parquet(tmp_path / "claims.parquet")
+
+    train_frequency(tmp_path / "quotes.parquet", tmp_path)
+    train_severity(tmp_path / "quotes.parquet", tmp_path / "claims.parquet", tmp_path)
+
+    model = HurdleModel(tmp_path)
+    reason_codes = model.explain(quotes, top_n=5)
+
+    assert len(reason_codes) == len(quotes)
+    for row in reason_codes:
+        assert len(row) <= 5
+        for entry in row:
+            assert "feature" in entry and "shap_pct" in entry
+            assert entry["feature"] in QUOTE_FEATURE_COLS
+            assert isinstance(entry["shap_pct"], float)
+
+
+def test_hurdle_model_explain_top_n_respected(tmp_path):
+    quotes = _make_quotes()
+    claims = _make_claims(quotes)
+    quotes.to_parquet(tmp_path / "quotes.parquet")
+    claims.to_parquet(tmp_path / "claims.parquet")
+
+    train_frequency(tmp_path / "quotes.parquet", tmp_path)
+    train_severity(tmp_path / "quotes.parquet", tmp_path / "claims.parquet", tmp_path)
+
+    model = HurdleModel(tmp_path)
+    for top_n in (1, 3, 5):
+        codes = model.explain(quotes, top_n=top_n)
+        assert all(len(row) <= top_n for row in codes)
+
+
+def test_hurdle_model_explain_explainer_cached(tmp_path):
+    quotes = _make_quotes()
+    claims = _make_claims(quotes)
+    quotes.to_parquet(tmp_path / "quotes.parquet")
+    claims.to_parquet(tmp_path / "claims.parquet")
+
+    train_frequency(tmp_path / "quotes.parquet", tmp_path)
+    train_severity(tmp_path / "quotes.parquet", tmp_path / "claims.parquet", tmp_path)
+
+    model = HurdleModel(tmp_path)
+    model.explain(quotes)
+    explainer_ref = model._freq_explainer
+    model.explain(quotes)
+    assert model._freq_explainer is explainer_ref  # same object, not re-created

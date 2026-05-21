@@ -59,12 +59,23 @@ def train(quotes_path: Path, claims_path: Path, output_dir: Path) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
     model.save_model(output_dir / "severity_model.json")
 
+    raw_importance = model.get_booster().get_score(importance_type="gain")
+    total_gain = sum(raw_importance.values()) or 1.0
+    feature_importance_pct = dict(
+        sorted(
+            {f: round(raw_importance.get(f, 0.0) / total_gain * 100, 2) for f in QUOTE_FEATURE_COLS}.items(),
+            key=lambda x: x[1],
+            reverse=True,
+        )
+    )
+
     metrics = {
         "mae_usd": round(mae, 2),
         "rmse_usd": round(rmse, 2),
         "mape": round(mape, 4),
         "train_rows": len(df),
         "target_mean_usd": round(float(y.mean()), 2),
+        "feature_importance_pct": feature_importance_pct,
     }
     (output_dir / "severity_metrics.json").write_text(json.dumps(metrics, indent=2))
     return metrics
