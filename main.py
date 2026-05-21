@@ -8,7 +8,7 @@ from data.entities import resolve_vehicles, resolve_persons, resolve_addresses, 
 from data.graph_builder import build_graph_from_claims, clear_graph
 from data.graph_features import compute_graph_features
 from data.validator import validate_data
-from data.config import CLAIMS_OUTPUT, OFFLINE_FEATURES_DIR, QUOTES_OUTPUT
+from data.config import CLAIMS_OUTPUT, OFFLINE_FEATURES_DIR, QUOTES_OUTPUT, RISK_MODELS_DIR
 
 load_dotenv()
 
@@ -22,6 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--compute-graph-features", action="store_true", help="Compute graph features and update claims data")
     parser.add_argument("--run-offline-pipeline", action="store_true", help="Build offline feature snapshots from quotes and claims parquet files")
     parser.add_argument("--validate-data", action="store_true", help="Validate generated datasets")
+    parser.add_argument("--train-risk-model", action="store_true", help="Train Stage 2 Hurdle Model (frequency + severity) and write models to data/processed/risk_models/")
     return parser
 
 
@@ -78,6 +79,26 @@ def main() -> None:
             output_dir=OFFLINE_FEATURES_DIR,
         )
         print(f"Offline pipeline complete: {quotes_written} quote snapshots, {claims_written} claim snapshots → {OFFLINE_FEATURES_DIR}")
+        if not args.validate_data:
+            return
+
+    if args.train_risk_model:
+        from underwriting.models.risk_scoring.train_frequency import train as train_frequency
+        from underwriting.models.risk_scoring.train_severity import train as train_severity
+        from underwriting.models.risk_scoring.hurdle_model import evaluate as evaluate_hurdle
+
+        print("Stage 2a — training frequency model (P(claim))…")
+        freq_metrics = train_frequency(QUOTES_OUTPUT, RISK_MODELS_DIR)
+        print(f"  AUC={freq_metrics['auc']}  Gini={freq_metrics['gini']}  log_loss={freq_metrics['log_loss']}")
+
+        print("Stage 2b — training severity model (E[cost | claim])…")
+        sev_metrics = train_severity(QUOTES_OUTPUT, CLAIMS_OUTPUT, RISK_MODELS_DIR)
+        print(f"  MAE=${sev_metrics['mae_usd']:,.0f}  RMSE=${sev_metrics['rmse_usd']:,.0f}  MAPE={sev_metrics['mape']:.1%}")
+
+        print("Stage 2c — evaluating hurdle model (risk score = P × E)…")
+        hurdle_metrics = evaluate_hurdle(QUOTES_OUTPUT, RISK_MODELS_DIR)
+        print(f"  Hurdle Gini={hurdle_metrics['hurdle_gini']}  mean_risk=${hurdle_metrics['risk_score_mean']:,.0f}  P95=${hurdle_metrics['risk_score_p95']:,.0f}")
+        print(f"Models written to {RISK_MODELS_DIR}")
         if not args.validate_data:
             return
 
