@@ -18,6 +18,11 @@ class HurdleModel:
 
     Both sub-models share QUOTE_FEATURE_COLS so the combined risk score is
     computable at underwriting time from a single feature vector.
+
+    If Stage 3 calibration artifacts (frequency_calibration.json,
+    severity_calibration.json) are present in model_dir they are applied
+    automatically: Platt scaling on P(claim) and multiplicative bias
+    correction on E[cost | claim].
     """
 
     def __init__(self, model_dir: Path) -> None:
@@ -27,19 +32,45 @@ class HurdleModel:
         self._sev.load_model(model_dir / "severity_model.json")
         self._model_dir = model_dir
         self._freq_explainer: shap.TreeExplainer | None = None
+        self._platt_a: float | None = None
+        self._platt_b: float | None = None
+        self._sev_bias: float = 1.0
+        self._load_calibration()
+
+    def _load_calibration(self) -> None:
+        freq_cal = self._model_dir / "frequency_calibration.json"
+        if freq_cal.exists():
+            params = json.loads(freq_cal.read_text())
+            self._platt_a = params["a"]
+            self._platt_b = params["b"]
+        sev_cal = self._model_dir / "severity_calibration.json"
+        if sev_cal.exists():
+            params = json.loads(sev_cal.read_text())
+            self._sev_bias = params["bias_correction"]
+
+    def _apply_freq_calibration(self, p_raw: np.ndarray) -> np.ndarray:
+        if self._platt_a is None:
+            return p_raw
+        p = np.clip(p_raw, 1e-9, 1.0 - 1e-9)
+        logit_p = np.log(p / (1.0 - p))
+        return 1.0 / (1.0 + np.exp(-(self._platt_a * logit_p + self._platt_b)))
+
+    @property
+    def calibration_applied(self) -> bool:
+        return self._platt_a is not None
 
     def score(self, df: pd.DataFrame) -> np.ndarray:
         """Return risk_score = P(claim) × E[cost | claim] for each row."""
         X = prepare_features(df)[QUOTE_FEATURE_COLS]
-        p_claim = self._freq.predict_proba(X)[:, 1]
-        e_cost = self._sev.predict(X)
+        p_claim = self._apply_freq_calibration(self._freq.predict_proba(X)[:, 1])
+        e_cost = self._sev.predict(X) * self._sev_bias
         return p_claim * e_cost
 
     def score_with_components(self, df: pd.DataFrame) -> pd.DataFrame:
         """Return DataFrame with p_claim, e_cost_usd, and risk_score columns."""
         X = prepare_features(df)[QUOTE_FEATURE_COLS]
-        p_claim = self._freq.predict_proba(X)[:, 1]
-        e_cost = self._sev.predict(X)
+        p_claim = self._apply_freq_calibration(self._freq.predict_proba(X)[:, 1])
+        e_cost = self._sev.predict(X) * self._sev_bias
         return pd.DataFrame(
             {"p_claim": p_claim, "e_cost_usd": e_cost, "risk_score": p_claim * e_cost},
             index=df.index,
@@ -99,6 +130,7 @@ def evaluate(quotes_path: Path, model_dir: Path) -> dict:
         "risk_score_p95": round(float(result["risk_score"].quantile(0.95)), 2),
         "p_claim_mean": round(float(result["p_claim"].mean()), 4),
         "e_cost_mean_usd": round(float(result["e_cost_usd"].mean()), 2),
+        "calibration_applied": model.calibration_applied,
     }
     (model_dir / "hurdle_metrics.json").write_text(json.dumps(metrics, indent=2))
     return metrics

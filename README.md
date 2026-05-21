@@ -46,6 +46,7 @@ sudo rm -rf ./data/raw/* ./data/processed/*
 docker compose run --rm app python main.py --generate-data --resolve-entities --build-graph --compute-graph-features --run-offline-pipeline --validate-data
 docker compose run --rm app python main.py --train-risk-model
 uv run -m main --train-risk-model
+uv run -m main --calibrate-risk-model
 
 # Maintenance
 # Delete existing graph with constraints

@@ -229,3 +229,148 @@ def test_hurdle_model_explain_explainer_cached(tmp_path):
     explainer_ref = model._freq_explainer
     model.explain(quotes)
     assert model._freq_explainer is explainer_ref  # same object, not re-created
+
+
+# ── Stage 3 Calibration ───────────────────────────────────────────────────────
+
+from underwriting.models.risk_scoring.calibrate import (
+    calibrate_frequency,
+    calibrate_severity,
+)
+
+
+def _train_both(tmp_path, quotes, claims):
+    train_frequency(tmp_path / "quotes.parquet", tmp_path)
+    train_severity(tmp_path / "quotes.parquet", tmp_path / "claims.parquet", tmp_path)
+
+
+def test_calibrate_frequency_writes_artifacts(tmp_path):
+    quotes = _make_quotes(n=500)
+    claims = _make_claims(quotes)
+    quotes.to_parquet(tmp_path / "quotes.parquet")
+    claims.to_parquet(tmp_path / "claims.parquet")
+    _train_both(tmp_path, quotes, claims)
+
+    metrics = calibrate_frequency(tmp_path / "quotes.parquet", tmp_path, tmp_path)
+
+    assert (tmp_path / "frequency_calibration.json").exists()
+    assert (tmp_path / "frequency_calibration_metrics.json").exists()
+    cal = _json.loads((tmp_path / "frequency_calibration.json").read_text())
+    assert cal["method"] == "platt"
+    assert "a" in cal and "b" in cal
+    assert "brier_before" in metrics
+    assert "brier_after" in metrics
+    assert "ece_before" in metrics
+    assert "ece_after" in metrics
+    assert "reliability_diagram" in metrics
+    assert isinstance(metrics["reliability_diagram"], list)
+
+
+def test_calibrate_severity_writes_artifacts(tmp_path):
+    quotes = _make_quotes(n=500)
+    claims = _make_claims(quotes)
+    quotes.to_parquet(tmp_path / "quotes.parquet")
+    claims.to_parquet(tmp_path / "claims.parquet")
+    _train_both(tmp_path, quotes, claims)
+
+    metrics = calibrate_severity(
+        tmp_path / "quotes.parquet", tmp_path / "claims.parquet", tmp_path, tmp_path
+    )
+
+    assert (tmp_path / "severity_calibration.json").exists()
+    assert (tmp_path / "severity_calibration_metrics.json").exists()
+    cal = _json.loads((tmp_path / "severity_calibration.json").read_text())
+    assert cal["method"] == "multiplicative"
+    assert cal["bias_correction"] > 0
+    assert "mae_before_usd" in metrics
+    assert "mae_after_usd" in metrics
+    assert metrics["mean_predicted_after_usd"] == pytest.approx(
+        metrics["mean_actual_usd"], rel=0.01
+    )
+
+
+def test_hurdle_model_loads_calibration_on_init(tmp_path):
+    quotes = _make_quotes(n=500)
+    claims = _make_claims(quotes)
+    quotes.to_parquet(tmp_path / "quotes.parquet")
+    claims.to_parquet(tmp_path / "claims.parquet")
+    _train_both(tmp_path, quotes, claims)
+
+    model_no_cal = HurdleModel(tmp_path)
+    assert not model_no_cal.calibration_applied
+    assert model_no_cal._platt_a is None
+    assert model_no_cal._sev_bias == 1.0
+
+    calibrate_frequency(tmp_path / "quotes.parquet", tmp_path, tmp_path)
+    calibrate_severity(
+        tmp_path / "quotes.parquet", tmp_path / "claims.parquet", tmp_path, tmp_path
+    )
+
+    model_cal = HurdleModel(tmp_path)
+    assert model_cal.calibration_applied
+    assert model_cal._platt_a is not None
+    assert model_cal._sev_bias != 1.0
+
+
+def test_hurdle_calibrated_probability_is_bounded(tmp_path):
+    quotes = _make_quotes(n=500)
+    claims = _make_claims(quotes)
+    quotes.to_parquet(tmp_path / "quotes.parquet")
+    claims.to_parquet(tmp_path / "claims.parquet")
+    _train_both(tmp_path, quotes, claims)
+    calibrate_frequency(tmp_path / "quotes.parquet", tmp_path, tmp_path)
+    calibrate_severity(
+        tmp_path / "quotes.parquet", tmp_path / "claims.parquet", tmp_path, tmp_path
+    )
+
+    model = HurdleModel(tmp_path)
+    result = model.score_with_components(quotes)
+
+    assert (result["p_claim"] >= 0).all() and (result["p_claim"] <= 1).all()
+    assert (result["e_cost_usd"] > 0).all()
+    assert (result["risk_score"] >= 0).all()
+
+
+def test_hurdle_calibration_risk_score_invariant(tmp_path):
+    """risk_score == p_claim * e_cost_usd must hold even with calibration applied."""
+    quotes = _make_quotes(n=500)
+    claims = _make_claims(quotes)
+    quotes.to_parquet(tmp_path / "quotes.parquet")
+    claims.to_parquet(tmp_path / "claims.parquet")
+    _train_both(tmp_path, quotes, claims)
+    calibrate_frequency(tmp_path / "quotes.parquet", tmp_path, tmp_path)
+    calibrate_severity(
+        tmp_path / "quotes.parquet", tmp_path / "claims.parquet", tmp_path, tmp_path
+    )
+
+    model = HurdleModel(tmp_path)
+    result = model.score_with_components(quotes)
+
+    np.testing.assert_allclose(
+        result["risk_score"].values,
+        (result["p_claim"] * result["e_cost_usd"]).values,
+        rtol=1e-6,
+    )
+
+
+def test_calibration_metrics_structure(tmp_path):
+    quotes = _make_quotes(n=500)
+    claims = _make_claims(quotes)
+    quotes.to_parquet(tmp_path / "quotes.parquet")
+    claims.to_parquet(tmp_path / "claims.parquet")
+    _train_both(tmp_path, quotes, claims)
+
+    freq_metrics = calibrate_frequency(tmp_path / "quotes.parquet", tmp_path, tmp_path)
+    sev_metrics = calibrate_severity(
+        tmp_path / "quotes.parquet", tmp_path / "claims.parquet", tmp_path, tmp_path
+    )
+
+    assert 0.0 <= freq_metrics["ece_before"] <= 1.0
+    assert 0.0 <= freq_metrics["ece_after"] <= 1.0
+    assert freq_metrics["brier_before"] > 0
+    assert freq_metrics["brier_after"] > 0
+    assert 0.0 < freq_metrics["actual_claim_rate"] < 1.0
+
+    assert sev_metrics["bias_correction"] > 0
+    assert sev_metrics["mae_before_usd"] > 0
+    assert sev_metrics["mae_after_usd"] > 0

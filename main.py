@@ -23,6 +23,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-offline-pipeline", action="store_true", help="Build offline feature snapshots from quotes and claims parquet files")
     parser.add_argument("--validate-data", action="store_true", help="Validate generated datasets")
     parser.add_argument("--train-risk-model", action="store_true", help="Train Stage 2 Hurdle Model (frequency + severity) and write models to data/processed/risk_models/")
+    parser.add_argument("--calibrate-risk-model", action="store_true", help="Stage 3: fit Platt scaling on frequency model + bias correction on severity model")
     return parser
 
 
@@ -99,6 +100,33 @@ def main() -> None:
         hurdle_metrics = evaluate_hurdle(QUOTES_OUTPUT, RISK_MODELS_DIR)
         print(f"  Hurdle Gini={hurdle_metrics['hurdle_gini']}  mean_risk=${hurdle_metrics['risk_score_mean']:,.0f}  P95=${hurdle_metrics['risk_score_p95']:,.0f}")
         print(f"Models written to {RISK_MODELS_DIR}")
+        if not (args.calibrate_risk_model or args.validate_data):
+            return
+
+    if args.calibrate_risk_model:
+        from underwriting.models.risk_scoring.calibrate import (
+            calibrate_frequency,
+            calibrate_severity,
+        )
+
+        print("Stage 3a — calibrating frequency model (Platt scaling)…")
+        freq_cal = calibrate_frequency(QUOTES_OUTPUT, RISK_MODELS_DIR, RISK_MODELS_DIR)
+        print(
+            f"  Brier: {freq_cal['brier_before']:.4f} → {freq_cal['brier_after']:.4f}"
+            f"  ECE: {freq_cal['ece_before']:.4f} → {freq_cal['ece_after']:.4f}"
+        )
+        print(
+            f"  p_claim mean: {freq_cal['p_claim_mean_before']:.4f} → {freq_cal['p_claim_mean_after']:.4f}"
+            f"  (actual rate: {freq_cal['actual_claim_rate']:.4f})"
+        )
+
+        print("Stage 3b — calibrating severity model (multiplicative bias correction)…")
+        sev_cal = calibrate_severity(QUOTES_OUTPUT, CLAIMS_OUTPUT, RISK_MODELS_DIR, RISK_MODELS_DIR)
+        print(
+            f"  Bias correction: ×{sev_cal['bias_correction']:.4f}"
+            f"  MAE: ${sev_cal['mae_before_usd']:,.0f} → ${sev_cal['mae_after_usd']:,.0f}"
+        )
+        print(f"Calibration artifacts written to {RISK_MODELS_DIR}")
         if not args.validate_data:
             return
 
