@@ -216,3 +216,100 @@ output directly).
 Should you correct ip_geolocation_delta_km → ip_geolocation_delta_miles?
 Yes, correct it. The agent spec says "USA standard units in data and outputs" — non-negotiable. More practically, if investigators or business stakeholders ever read raw feature values, mixing km and miles creates confusion. The rename is a one-line change in feature_definitions.py and the snapshot schema, and it's better to fix it now before it propagates into trained model artifacts and audit snapshots that are immutable.
 Add a decision log entry (DEC-012) so the correction is traceable.
+
+## DEC-013 — Source datetimes in raw parquet; derived ints unchanged in feature store (Option A)
+
+**Date:** 2026-Q2
+**Decision:** Explicit source datetime columns are added to `quotes.parquet` and
+`claims.parquet` as raw pipeline columns only. The derived int features
+`policy_inception_days` and `reporting_delay_days` are unchanged in the feature
+store, feature vector, and all trained artifacts. Source datetimes do not enter
+the feature vector.
+
+**Columns added to `quotes.parquet`:**
+
+| Column | Type | Nullable | Written By |
+|---|---|---|---|
+| `quote_requested_at` | datetime | No | `generator.py` |
+| `quote_completed_at` | datetime | No | `hurdle_model.py` |
+| `policy_inception_date` | date | No | `entity_policy.py` |
+
+**Columns added to `claims.parquet`:**
+
+| Column | Type | Nullable | Written By |
+|---|---|---|---|
+| `loss_event_datetime` | datetime | No | `generator.py` |
+| `fnol_submitted_at` | datetime | No | `generator.py` |
+| `claim_closed_at` | datetime | Yes — open claims | `generator.py` |
+| `fraud_confirmed_at` | datetime | Yes — unconfirmed claims | Label store, post-SIU |
+
+**Derivation relationships documented in `feature_definitions.py`:**
+
+**Rationale:**
+Without datetime columns, PSI monitoring has no time axis — "current period" is
+undefined and drift windows cannot be constructed. The derived int features
+(`policy_inception_days`, `reporting_delay_days`) are already in trained model
+artifacts, audit snapshots, and the feature vector schema. Replacing them with
+datetimes would require model retraining, snapshot schema migration, and online
+serving changes — a high-cost change with no model accuracy benefit.
+
+Option A — add source datetimes to raw parquet only — is non-breaking. Both
+pipelines continue to consume the same derived ints. The datetimes serve three
+distinct consumers that the ints cannot serve:
+
+1. **PSI current-period window** — `quote_requested_at` and `fnol_submitted_at`
+   define the rolling 14-day cohort for feature distribution comparison against
+   the Champion training reference cohort.
+
+2. **Concept drift / confirmed label window** — `fraud_confirmed_at` makes the
+   90/180-day confirmed label window from DEC-007 queryable. Without it, joining
+   confirmed outcomes to training cohorts requires reconstructing closure dates
+   from unstructured SIU notes.
+
+3. **Temporal integrity validation** — `validator.py` can now enforce ordering
+   constraints with real datetime arithmetic rather than checking that derived
+   ints are non-negative (e.g. `fnol_submitted_at >= loss_event_datetime` is
+   stronger than `reporting_delay_days >= 0`).
+
+**Alternative considered (Option B):** Replace derived ints with source datetimes
+in the feature store; derive at query time. Rejected — adds compute to the
+<100ms online serving path, risks training-serving skew if derivation logic
+diverges between offline and online paths, and requires retraining all models
+that consume the affected features.
+
+**Trade-off accepted:** `policy_inception_days` and `reporting_delay_days` have
+two representations — source datetimes in raw parquet, derived ints in the
+feature store. The derivation relationship must be kept in sync in
+`feature_definitions.py`. If the derivation logic ever needs to change, the
+source datetimes in raw parquet are the authoritative input — never recompute
+from the ints.
+
+**Validator checks added to `validator.py`:**
+```python
+("fnol after loss event",
+    lambda df: (df["fnol_submitted_at"] >= df["loss_event_datetime"]).all()),
+
+("claim closed after fnol (where closed)",
+    lambda df: (df[df["claim_closed_at"].notna()]["claim_closed_at"]
+                >= df[df["claim_closed_at"].notna()]["fnol_submitted_at"]).all()),
+
+("fraud confirmed after fnol (where confirmed)",
+    lambda df: (df[df["fraud_confirmed_at"].notna()]["fraud_confirmed_at"]
+                >= df[df["fraud_confirmed_at"].notna()]["fnol_submitted_at"]).all()),
+
+("reporting_delay_days consistent with datetimes",
+    lambda df: (
+        (df["fnol_submitted_at"] - df["loss_event_datetime"]).dt.days
+        == df["reporting_delay_days"]
+    ).all()),
+
+("policy inception before quote completed",
+    lambda df: (df["policy_inception_date"]
+                >= df["quote_completed_at"].dt.date).all()),
+```
+
+**Applies to:** `generator.py`, `archetypes_claims.py`, `archetypes_underwriting.py`,
+`entity_policy.py`, `hurdle_model.py`, `validator.py`, `feature_definitions.py`
+(derivation documentation only — no logic change), `monitoring/psi_drift.py`
+(uses `quote_requested_at` / `fnol_submitted_at` as window anchor).
+```

@@ -37,7 +37,7 @@ real-time scoring path.
 | Person | `entity_person.py` | Deduplicated person with role flags (policyholder / driver / claimant) |
 | Address | `entity_address.py` | Normalized + hashed address for graph edge reliability |
 | Phone | `entity_phone.py` | Normalized + hashed phone number |
-| Policy | `entity_policy.py` | Coverage validation, inception date, lapse calculation |
+| Policy | `entity_policy.py` | Coverage validation, inception date, lapse calculation — writes `policy_inception_date` to `data/entities/policies.parquet` |
 
 **Key rule:** `graph_builder.py` loads resolved entities as nodes and edges only.
 Vehicle features (MSRP, ADAS efficacy, age) are computed from resolved entities
@@ -48,18 +48,24 @@ in the feature store pipeline — not inside the graph builder.
 ## Stage 1 — Feature Store (Versioned)
 
 ### Purpose
-The Feature Store is the single source of truth for all inputs. Every feature
+The Feature Store is the single source of truth for all model inputs. Every feature
 record is **frozen at quote time** and immutably stored with a timestamp.
 All inputs are resolved entities from Stage 0 — raw generator output is not
 fed directly into the feature store pipeline.
 
 ### Why Key-Value Features Are Called a "Feature Vector"
 
-Despite being stored as named key-value pairs, the term "vector" refers to what happens **at model input time**, not storage time.
+Despite being stored as named key-value pairs, the term "vector" refers to what
+happens **at model input time**, not storage time.
 
-When the feature store assembles the record for scoring, it selects the values in a **fixed, ordered sequence** — dropping the keys — producing a numeric array like `[712, 2, 0.31, null, 28000, ...]`. That ordered array *is* the vector. The key-value format is just a human-readable, audit-friendly representation of the same data. XGBoost and other models only see the ordered numeric sequence.
+When the feature store assembles the record for scoring, it selects the values in
+a **fixed, ordered sequence** — dropping the keys — producing a numeric array like
+`[712, 2, 0.31, null, 28000, ...]`. That ordered array *is* the vector. The
+key-value format is just a human-readable, audit-friendly representation of the
+same data. XGBoost and other models only see the ordered numeric sequence.
 
-The architecture stores features as named pairs precisely *because* the keys are needed for the audit trail and regulatory replay — but the model consumes a vector.
+The architecture stores features as named pairs precisely *because* the keys are
+needed for the audit trail and regulatory replay — but the model consumes a vector.
 
 ### Structure
 Each record is stored as named key-value pairs — not raw vectors:
@@ -81,6 +87,14 @@ horsepower:                   192                 ← resolved by entity_vehicle
 msrp_to_power_ratio:          145.8               ← resolved by entity_vehicle.py
 adas_aeb_efficacy:            0.74                ← resolved by entity_vehicle.py
 ```
+
+> **Source datetime columns are not feature vector entries.** `quote_requested_at`,
+> `quote_completed_at`, and `policy_inception_date` are raw parquet pipeline columns
+> (see DEC-013). They live in `data/raw/quotes.parquet` and
+> `data/entities/policies.parquet`. They are consumed by `monitoring/psi_drift.py`
+> for drift window construction and by `feature_definitions.py` for deriving
+> `policy_inception_days`. They are never passed to any model and do not appear
+> in the feature vector above.
 
 ### State Regulatory Mask
 A `state_regulatory_profile` config gates feature eligibility before the vector
@@ -205,6 +219,33 @@ PSI monitors the distribution of input features over time:
 | 0.1 – 0.25 | Warning | Investigate |
 | > 0.25 | Critical | Emergency retrain |
 
+**Defining the current-period window:** The current-period cohort is a rolling
+14-day window of live quote records, keyed on `quote_requested_at` in
+`data/raw/quotes.parquet`. This column is the event-time anchor — it records
+when the customer initiated the quote, not when the feature store froze the vector
+(`timestamp`). The reference cohort is bounded by `feature_store_version` tag on
+feature snapshots plus the `quote_requested_at` range that falls within the
+Champion training window. Both anchors are configured in `config.py`:
+
+```python
+PSI_REFERENCE_VERSION    = "v1.0.0"        # feature_store_version of Champion
+PSI_CURRENT_WINDOW_DAYS  = 14              # rolling lookback on quote_requested_at
+PSI_MIN_RECORDS          = 500             # minimum window size for stable PSI
+```
+
+`psi_drift.py` reads `quote_requested_at` directly from `data/raw/quotes.parquet`
+— not from the feature store or feature snapshots. Source datetime columns are
+pipeline columns only and do not enter the feature vector (DEC-013).
+
+**Null rate as a PSI signal:** Null rates for `credit_score` (state-restricted)
+and telematics features (`telematics_distraction_score`, `telematics_hard_brake_rate`,
+`commute_entropy`) are themselves PSI-monitored signals. A shift in the state mix
+of incoming quotes — for example, an increase in CA volume — will cause
+`credit_score` null rate to rise and PSI to spike. That is real population drift,
+not noise. Do not filter nulls before computing PSI; treat null as its own bin in
+the PSI distribution. A telematics null rate shift signals a change in opt-in
+behaviour that may affect model calibration for the 60% non-telematics cohort.
+
 ### Concept Drift
 
 When the *relationship* between features and claims changes — not just the feature
@@ -234,7 +275,10 @@ safe, evidence-based rollout:
 ```
 
 The drift monitor feeds this loop: a PSI > 0.25 alert triggers a challenger
-retrain, not an immediate Champion replacement.
+retrain, not an immediate Champion replacement. The challenger training cohort is
+bounded by `feature_store_version` + `quote_requested_at` range — ensuring the
+challenger trains on the same time-bounded population that triggered the PSI alert,
+not on a broader historical window that dilutes the drift signal.
 
 ---
 
@@ -250,9 +294,15 @@ Entity Resolution                        ← Stage 0: VIN decode, person dedup,
       │  entity_person.py  → persons.parquet
       │  entity_address.py → addresses.parquet
       │  entity_policy.py  → policies.parquet
+      │                       (writes policy_inception_date)
       │
       ▼
 Feature Store ── state mask ── frozen vector ── audit trail
+      │                                              │
+      │                               quote_requested_at (raw parquet)
+      │                               ↓
+      │                          psi_drift.py
+      │                          (PSI window anchor — not from feature store)
       │
       ├──────────────────────────────┐
       ▼                              ▼
@@ -267,10 +317,14 @@ P(claim > 0)                 E(cost | claim)
               ▼             ▼
          Premium        Drift monitor
     (business layer)   PSI · concept drift
+                       keyed on quote_requested_at
+                       (14-day rolling window)
                              │
                              ▼
                     Champion-Challenger loop
                     Shadow → Gini → Promote
+                    (cohort bounded by feature_store_version
+                     + quote_requested_at range)
 ```
 
 ---
@@ -280,10 +334,16 @@ P(claim > 0)                 E(cost | claim)
 - [ ] Entity resolution complete before feature store vector assembly
 - [ ] Vehicle features (MSRP, ADAS, age) sourced from `entity_vehicle.py` — not
       looked up at scoring time
+- [ ] `policy_inception_date` written by `entity_policy.py` to `data/entities/policies.parquet`
+      — used as source for `policy_inception_days` derivation in `feature_definitions.py`
 - [ ] Feature Store versioning enabled with millisecond-precision timestamps
 - [ ] State regulatory mask applied before vector assembly — not at model level
 - [ ] Credit score set to `null` (not imputed) for restricted states
 - [ ] Calibrated scores stored in audit trail, not raw logits
 - [ ] PSI monitoring active on all top-10 features
+- [ ] PSI current-period window keyed on `quote_requested_at` from
+      `data/raw/quotes.parquet` — not from the feature store or feature snapshots
+- [ ] Null rate for `credit_score` and telematics features included as PSI signals —
+      null treated as its own bin, not filtered before PSI computation
 - [ ] Champion-Challenger shadow mode running before any model promotion
 - [ ] SHAP global importance reviewed at each retraining cycle

@@ -1,5 +1,3 @@
-
-
 # Hybrid Real-Time Fraud Decisioning Platform
 ### Personal Auto Insurance — ML Meetup Architecture Deep Dive
 
@@ -184,7 +182,7 @@ Anomaly Detector         → Isolation Forest / Autoencoder    [unsupervised]
 | **PU Learning** (Positive-Unlabeled) | Treats negatives as "unlabeled," not confirmed clean |
 | **Confident Learning** (cleanlab) | Identifies likely mislabeled examples via out-of-fold probability calibration |
 | **Label smoothing** | Soft targets reduce overconfidence on noisy negatives |
-| **Delayed label pipeline** | Re-trains on confirmed fraud labels post-SIU closure; models updated on rolling 90/180-day confirmed windows |
+| **Delayed label pipeline** | Re-trains on confirmed fraud labels post-SIU closure; models updated on rolling 90/180-day confirmed windows keyed on `fraud_confirmed_at` in `data/raw/claims.parquet` — without this column, joining confirmed outcomes to training cohorts requires reconstructing closure dates from unstructured SIU notes |
 | **Semi-supervised augmentation** | Propagates fraud signal through graph neighborhoods |
 
 ---
@@ -305,15 +303,24 @@ score and claim complexity, not uniformly applied.
 
 ### Monitoring Layer
 
-| Check | Trigger |
-|---|---|
-| **Null rate spike** | Feature missing > baseline threshold |
-| **Schema drift** | Unexpected column types or new categories |
-| **Freshness SLA** | Feature timestamp stale beyond defined window |
-| **Training-serving skew** | Distribution shift between offline training and online inference features |
-| **Delayed event ingestion** | Telematics / third-party feed latency spike |
-| **Entity resolution failure** | VIN decode miss rate spike, address normalization failure rate above threshold |
-| **Entity dedup collision** | Unexpected merge of distinct persons or addresses — monitor dedup collision rate per batch |
+| Check | Trigger | Freshness Anchor |
+|---|---|---|
+| **Null rate spike** | Feature missing > baseline threshold | — |
+| **Schema drift** | Unexpected column types or new categories | — |
+| **Freshness SLA** | Feature timestamp stale beyond defined window | `fnol_submitted_at` for claims; `quote_requested_at` for quotes — sourced from `data/raw/` parquet, not the feature store |
+| **Training-serving skew** | Distribution shift between offline training and online inference features | — |
+| **Delayed event ingestion** | Telematics / third-party feed latency spike | — |
+| **Entity resolution failure** | VIN decode miss rate spike, address normalization failure rate above threshold | — |
+| **Entity dedup collision** | Unexpected merge of distinct persons or addresses — monitor dedup collision rate per batch | — |
+
+> **Source datetime columns and drift monitoring:** `fnol_submitted_at` and
+> `quote_requested_at` are the event-time anchors for freshness SLA checks and
+> PSI current-period window construction. They are consumed by
+> `monitoring/psi_drift.py` directly from `data/raw/claims.parquet` and
+> `data/raw/quotes.parquet` — not from the feature store or feature snapshots.
+> The feature store serves only derived int features (`reporting_delay_days`,
+> `policy_inception_days`) to models. Source datetimes never enter the feature
+> vector. See DEC-013.
 
 **Fallback policy:**
 If critical features are unavailable, the system automatically routes to a degraded
@@ -330,7 +337,7 @@ features on the next retraining cycle if undetected.
 ```
 Training (offline)
     │  Feature Store snapshot (versioned)
-    │  PU-corrected labels (90/180d confirmed window)
+    │  PU-corrected labels (90/180d confirmed window — keyed on fraud_confirmed_at)
     │  Adversarial augmentation
     ▼
 Validation
@@ -352,10 +359,32 @@ Retraining Triggers
        Scheduled (monthly)  +  Drift-triggered (PSI > threshold)
 ```
 
+### PSI Current-Period Window
+
+PSI compares two populations: the reference cohort used to train the current
+Champion, and the current-period cohort of live records.
+
+- **Current-period window:** rolling 14-day cohort of live claims and quotes,
+  keyed on `fnol_submitted_at` (claims) and `quote_requested_at` (quotes) in
+  `data/raw/` parquet. Configured via `PSI_CURRENT_WINDOW_DAYS` in `config.py`.
+- **Reference cohort:** records where `fnol_submitted_at` / `quote_requested_at`
+  falls within the training window for the current Champion, identified by
+  `feature_store_version` tag on each feature snapshot.
+- **Minimum record threshold:** PSI is not computed on windows thinner than
+  `PSI_MIN_RECORDS` (config.py) — thin windows produce unstable PSI estimates.
+- **Null rate as a PSI signal:** null rates for `credit_score` and `telematics_*`
+  features are PSI-monitored signals. A state-mix shift (e.g. more CA quotes)
+  will cause `credit_score` PSI to spike — that is real drift, not noise. Do not
+  filter nulls before PSI; treat null as its own bin.
+
 ### What "Champion-Challenger" Actually Gates
 - Not just AUC: gates on **fraud dollars captured per 1,000 claims scored**
 - False positive rate on fast-track STP claims (customer friction metric)
 - Investigator agreement rate on HITL escalations
+- Reference cohort for challenger training is bounded by `feature_store_version`
+  + `fnol_submitted_at` / `quote_requested_at` — ensuring the challenger trains
+  on the same time-bounded population that triggered the PSI alert, not on
+  a broader historical window that dilutes the drift signal
 
 ---
 
@@ -441,13 +470,14 @@ Override patterns are analyzed to detect systematic model blind spots.
 | **Framing** | Adversarial risk orchestration, not binary classification |
 | **Entity foundation** | Independent entity resolution layer before feature store and graph build |
 | **Scoring** | Multi-model ensemble + stacking meta-learner |
-| **Label strategy** | PU Learning + Confident Learning + delayed confirmed labels |
+| **Label strategy** | PU Learning + Confident Learning + delayed confirmed labels keyed on `fraud_confirmed_at` |
 | **Inference** | Hybrid sync (<100ms) + async (deep enrichment) |
 | **Decisions** | Risk-tiered adaptive routing, not binary approve/deny |
 | **Explainability** | SHAP per-decision + counterfactuals + graph path explanation |
 | **Resilience** | Fallback scoring policy on feature pipeline failure |
 | **Learning** | Continuous retraining from HITL feedback + drift triggers |
 | **Adversarial** | Red-team pipeline + GenAI synthetic fraud simulation |
+| **Drift window** | PSI current period keyed on `fnol_submitted_at` / `quote_requested_at` from raw parquet (DEC-013) |
 
 ---
 
