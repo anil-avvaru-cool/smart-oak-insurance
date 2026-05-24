@@ -24,6 +24,7 @@ services:
 
   app:
     build: .
+    user: "${HOST_UID}:${HOST_GID}"
     depends_on:
       redis:
         condition: service_started
@@ -35,7 +36,8 @@ services:
       REDIS_URL: "${REDIS_URL}"
       NEO4J_URI: "${NEO4J_URI}"
       NEO4J_USER: "${NEO4J_USER}"
-      NEO4J_PASSWORD: "${NEO4J_PASSWORD}"    
+      NEO4J_PASSWORD: "${NEO4J_PASSWORD}"
+      HOME: /tmp
 
 volumes:
   neo4j_data:

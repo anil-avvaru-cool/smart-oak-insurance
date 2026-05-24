@@ -13,24 +13,21 @@ Synthetic insurance risk-and-fraud platform for underwriting and claims modeling
    ```bash
    uv sync
    ```
-3. Configure environment variables:
+
    ```bash
+   # Configure environment variables:
    cp example.env .env
    # Edit .env with your configuration
+
+   # Copy dependencies to requirements.txt to use in docker
+   uv export --format requirements-txt --no-hashes --no-emit-workspace > requirements.txt
+
    ```
-
-
 ## Generate synthetic data
 
 Run locally:
 ```bash
-uv run -m main --generate-data
-uv run -m main --resolve-entities
-```
-
-Validate generated data:
-```bash
-uv run -m main --validate-data
+uv run -m main --generate-data --resolve-entities --build-graph --compute-graph-features --run-offline-pipeline --validate-data
 ```
 
 Generated outputs are written to `data/raw/quotes.parquet`, `data/raw/claims.parquet`, and resolved entities to `data/entities/`.
@@ -39,16 +36,24 @@ Generated outputs are written to `data/raw/quotes.parquet`, `data/raw/claims.par
 
 Docker commands:
 ```bash
-docker compose up -d --build
-docker compose up -d neo4j redis
+docker compose build --no-cache
+docker compose up -d neo4j redis app
 sudo rm -rf ./data/raw/* ./data/processed/*
 # Run all in single command
 docker compose run --rm app python main.py --generate-data --resolve-entities --build-graph --compute-graph-features --run-offline-pipeline --validate-data
 docker compose run --rm app python main.py --train-risk-model
+
+uv run -m main --generate-data --resolve-entities --build-graph --compute-graph-features --run-offline-pipeline --validate-data
 uv run -m main --train-risk-model
 uv run -m main --calibrate-risk-model
 
 # Maintenance
+
+# To create permissions for current user
+sudo chown -R $USER:$USER /path/to/directory
+chmod -R u+rwx /path/to/directory
+
+
 # Delete existing graph with constraints
 docker compose run --rm app python main.py --reset-graph
 # 1. Export variables to your current host terminal(only once)
@@ -64,6 +69,7 @@ docker compose exec neo4j cypher-shell -u neo4j -p "$NEO4J_PASSWORD" \
 docker compose logs neo4j
 docker compose down
 docker compose down -v
+docker compose rm -s -f -v app
 docker compose down --rmi all -v
 ```
 

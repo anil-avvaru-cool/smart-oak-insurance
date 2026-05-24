@@ -1,10 +1,24 @@
-.venv
-__pycache__
-.pytest_cache
-data/raw
-data/processed
-*.pyc
-.env
+# Virtual environments
 .venv/
+venv/
+
+# Python cache and testing artifacts
+**/__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+
+# Data and environment files
+data/
+.env
+
+# Documentation and Git
 *.md
+.git/
+.github/
+.gitignore
+
+# Massive data formats (failsafe)
 *.parquet
+*.csv

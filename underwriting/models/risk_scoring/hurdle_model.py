@@ -113,7 +113,14 @@ class HurdleModel:
 
 
 def evaluate(quotes_path: Path, model_dir: Path) -> dict:
-    """Score all quotes and report combined Gini + risk score distribution."""
+    """Score all quotes and report combined Gini + risk score distribution.
+
+    DEC-013 Phase 3: after scoring, writes risk_score_at_issuance (model-computed,
+    replacing the generator heuristic) and quote_completed_at (scoring timestamp)
+    back to quotes_path so that policy_inception_days can be derived from datetimes.
+    quote_completed_at is only written if the column is absent — preserving the
+    synthetic temporal spread generated in Phase 2.
+    """
     from sklearn.metrics import roc_auc_score
 
     df = pd.read_parquet(quotes_path)
@@ -133,4 +140,11 @@ def evaluate(quotes_path: Path, model_dir: Path) -> dict:
         "calibration_applied": model.calibration_applied,
     }
     (model_dir / "hurdle_metrics.json").write_text(json.dumps(metrics, indent=2))
+
+    # DEC-013 Phase 3: write model scores back; stamp quote_completed_at if absent
+    df["risk_score_at_issuance"] = result["risk_score"].values
+    if "quote_completed_at" not in df.columns:
+        df["quote_completed_at"] = pd.Timestamp.now(tz="UTC")
+    df.to_parquet(quotes_path, index=False)
+
     return metrics

@@ -265,7 +265,7 @@ def validate_entity_resolution() -> None:
     print(f"  valid phones: {valid_phones}/{len(phones_df)}")
 
     # Policy validation
-    if (policies_df["inception_date"] > policies_df["expiration_date"]).any():
+    if (policies_df["policy_inception_date"] > policies_df["expiration_date"]).any():
         print(f"  {_FAIL} policies with expiration before inception found")
     else:
         print(f"  {_PASS} policy dates are valid ({len(policies_df)} policies)")
@@ -521,6 +521,113 @@ def _check_graph_sentinel_coherence(claims_df: pd.DataFrame) -> None:
             print(f"  {_WARN} legit sentinel rate is lower than fraud rate (hop_distance signal may be inverted)")
 
 
+def _check_temporal_integrity(quotes_df: pd.DataFrame, claims_df: pd.DataFrame) -> None:
+    """DEC-013 temporal ordering and datetime arithmetic consistency checks (8 guards)."""
+    print("\nValidating temporal integrity (DEC-013)...")
+
+    # 4.6 — quote_requested_at populated for all quotes
+    if "quote_requested_at" in quotes_df.columns:
+        null_count = quotes_df["quote_requested_at"].isna().sum()
+        if null_count:
+            print(f"  {_FAIL} {null_count} quotes missing quote_requested_at")
+        else:
+            print(f"  {_PASS} quote_requested_at populated for all {len(quotes_df)} quotes")
+    else:
+        print(f"  {_WARN} quote_requested_at absent — run --generate-data to add datetime columns")
+
+    # 4.7 — fnol_submitted_at populated for all claims
+    if "fnol_submitted_at" not in claims_df.columns:
+        print(f"  {_WARN} fnol_submitted_at absent — skipping claims temporal checks")
+        return
+    null_count = claims_df["fnol_submitted_at"].isna().sum()
+    if null_count:
+        print(f"  {_FAIL} {null_count} claims missing fnol_submitted_at")
+    else:
+        print(f"  {_PASS} fnol_submitted_at populated for all {len(claims_df)} claims")
+
+    if "loss_event_datetime" not in claims_df.columns:
+        print(f"  {_WARN} loss_event_datetime absent — skipping downstream temporal checks")
+        return
+
+    fnol = pd.to_datetime(claims_df["fnol_submitted_at"])
+    loss = pd.to_datetime(claims_df["loss_event_datetime"])
+
+    # 4.1 — fnol after loss event
+    bad = (fnol < loss).sum()
+    if bad:
+        print(f"  {_FAIL} {bad} claims have fnol_submitted_at before loss_event_datetime")
+    else:
+        print(f"  {_PASS} fnol_submitted_at >= loss_event_datetime for all claims")
+
+    # 4.2 — claim closed after fnol (where closed)
+    if "claim_closed_at" in claims_df.columns:
+        closed = pd.to_datetime(claims_df["claim_closed_at"])
+        mask = closed.notna()
+        if mask.any():
+            bad = (closed[mask] < fnol[mask]).sum()
+            if bad:
+                print(f"  {_FAIL} {bad} closed claims have claim_closed_at before fnol_submitted_at")
+            else:
+                print(f"  {_PASS} claim_closed_at >= fnol_submitted_at for all {mask.sum()} closed claims")
+    else:
+        print(f"  {_WARN} claim_closed_at absent — skipping closed-after-fnol check")
+
+    # 4.3 — fraud confirmed after fnol (where confirmed)
+    if "fraud_confirmed_at" in claims_df.columns:
+        confirmed = pd.to_datetime(claims_df["fraud_confirmed_at"])
+        mask = confirmed.notna()
+        if mask.any():
+            bad = (confirmed[mask] < fnol[mask]).sum()
+            if bad:
+                print(f"  {_FAIL} {bad} claims have fraud_confirmed_at before fnol_submitted_at")
+            else:
+                print(f"  {_PASS} fraud_confirmed_at >= fnol_submitted_at for all {mask.sum()} confirmed-fraud claims")
+    else:
+        print(f"  {_WARN} fraud_confirmed_at absent — skipping fraud-confirmed-after-fnol check")
+
+    # 4.4 — reporting_delay_days consistent with datetimes (critical drift guard)
+    if "reporting_delay_days" in claims_df.columns:
+        derived = (fnol - loss).dt.days
+        delta = (claims_df["reporting_delay_days"] - derived).abs()
+        bad = (delta > 1).sum()  # allow 1-day tolerance for intra-day rounding
+        if bad:
+            print(f"  {_FAIL} {bad} claims: reporting_delay_days inconsistent with fnol−loss diff (|delta|>1)")
+        else:
+            print(f"  {_PASS} reporting_delay_days consistent with datetime diff for all claims")
+
+    # 4.5 — fraud_confirmed_at null for legitimate claims
+    if "fraud_confirmed_at" in claims_df.columns and "is_fraud" in claims_df.columns:
+        legit = claims_df[claims_df["is_fraud"] == False]
+        bad = legit["fraud_confirmed_at"].notna().sum()
+        if bad:
+            print(f"  {_FAIL} {bad} legitimate claims have non-null fraud_confirmed_at")
+        else:
+            print(f"  {_PASS} fraud_confirmed_at is null for all {len(legit)} legitimate claims")
+
+    # 4.8 — policy inception before quote_completed_at (requires entities join)
+    from data.config import RAW_DATA_DIR
+    policies_path = RAW_DATA_DIR / "entities" / "policies.parquet"
+    if "quote_completed_at" not in quotes_df.columns:
+        print(f"  {_WARN} quote_completed_at absent — skipping policy inception check")
+    elif not policies_path.exists():
+        print(f"  {_SKIP} policy inception check (run --resolve-entities first)")
+    else:
+        try:
+            pol = pd.read_parquet(policies_path)
+            merged = quotes_df[["quote_id", "quote_completed_at"]].merge(
+                pol[["quote_id", "policy_inception_date"]], on="quote_id", how="inner"
+            )
+            inception = pd.to_datetime(merged["policy_inception_date"])
+            completed = pd.to_datetime(merged["quote_completed_at"]).dt.normalize()
+            bad = (inception < completed).sum()
+            if bad:
+                print(f"  {_FAIL} {bad} policies have inception_date before quote_completed_at")
+            else:
+                print(f"  {_PASS} policy_inception_date >= quote_completed_at for all {len(merged)} policies")
+        except Exception as exc:
+            print(f"  {_WARN} policy inception check skipped: {exc}")
+
+
 def validate_feature_correlations(quotes_df: pd.DataFrame, claims_df: pd.DataFrame) -> None:
     """Deep cross-feature and fraud-signal correlation checks.
 
@@ -537,11 +644,20 @@ def validate_feature_correlations(quotes_df: pd.DataFrame, claims_df: pd.DataFra
     _check_cross_dataset_spine(quotes_df, claims_df)
     _check_attorney_coherence(claims_df)
     _check_graph_sentinel_coherence(claims_df)
+    _check_temporal_integrity(quotes_df, claims_df)
 
 
 _SNAPSHOT_ENVELOPE_KEYS = frozenset({
     "record_id", "record_type", "timestamp", "feature_store_version",
     "state", "regulatory_mask_applied", "features",
+})
+
+# DEC-013 Phase 5: type-specific envelope keys including audit datetime fields
+_QUOTE_ENVELOPE_KEYS = _SNAPSHOT_ENVELOPE_KEYS | frozenset({
+    "quote_requested_at", "quote_completed_at", "_datetime_note",
+})
+_CLAIM_ENVELOPE_KEYS = _SNAPSHOT_ENVELOPE_KEYS | frozenset({
+    "fnol_submitted_at", "loss_event_datetime", "_datetime_note",
 })
 
 _QUOTE_FEATURE_KEYS = frozenset({
@@ -576,12 +692,20 @@ _TELEMATICS_SIGNAL_KEYS = (
 
 
 def _check_snapshot_envelope(snap: dict, path: str) -> list[str]:
-    missing = _SNAPSHOT_ENVELOPE_KEYS - snap.keys()
+    record_type = snap.get("record_type")
+    if record_type == "quote":
+        expected = _QUOTE_ENVELOPE_KEYS
+    elif record_type == "claim":
+        expected = _CLAIM_ENVELOPE_KEYS
+    else:
+        expected = _SNAPSHOT_ENVELOPE_KEYS
+
+    missing = expected - snap.keys()
     errs: list[str] = []
     if missing:
         errs.append(f"{path}: missing envelope keys {sorted(missing)}")
-    if snap.get("record_type") not in ("quote", "claim"):
-        errs.append(f"{path}: invalid record_type={snap.get('record_type')!r}")
+    if record_type not in ("quote", "claim"):
+        errs.append(f"{path}: invalid record_type={record_type!r}")
     if not isinstance(snap.get("features"), dict):
         errs.append(f"{path}: 'features' is not a dict")
     return errs

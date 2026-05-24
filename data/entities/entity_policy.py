@@ -11,16 +11,21 @@ from data.config import CLAIMS_OUTPUT, QUOTES_OUTPUT, RAW_DATA_DIR
 def resolve_policies() -> pd.DataFrame:
     quotes_df = pd.read_parquet(QUOTES_OUTPUT)
 
+    has_quote_timestamps = "quote_completed_at" in quotes_df.columns
     policies: list[dict] = []
 
     for _, row in quotes_df.iterrows():
-        inception_date = datetime.now() - timedelta(days=max(1, int(row.get("insurance_lapse_days", 0) or 0)))
+        if has_quote_timestamps and pd.notna(row.get("quote_completed_at")):
+            # DEC-013: policy inception is the quote completion date
+            inception_date = pd.Timestamp(row["quote_completed_at"]).to_pydatetime()
+        else:
+            inception_date = datetime.now() - timedelta(days=max(1, int(row.get("insurance_lapse_days", 0) or 0)))
         expiration_date = inception_date + timedelta(days=365)
 
         policies.append({
             "policy_id": str(uuid.uuid4()),
             "quote_id": row["quote_id"],
-            "inception_date": inception_date.strftime("%Y-%m-%d"),
+            "policy_inception_date": inception_date.strftime("%Y-%m-%d"),
             "expiration_date": expiration_date.strftime("%Y-%m-%d"),
             "status": "active" if expiration_date > datetime.now() else "lapsed",
             "is_lapsed": expiration_date < datetime.now(),
@@ -32,7 +37,7 @@ def resolve_policies() -> pd.DataFrame:
     for _, claim_row in claims_df.iterrows():
         policy_row = policies_df[policies_df["quote_id"] == claim_row["quote_id"]]
         if len(policy_row) > 0:
-            inception_date_obj = datetime.strptime(policy_row.iloc[0]["inception_date"], "%Y-%m-%d")
+            inception_date_obj = datetime.strptime(policy_row.iloc[0]["policy_inception_date"], "%Y-%m-%d")
             policy_inception_days = max(0, int((datetime.now() - inception_date_obj).days))
             assert policy_inception_days >= 0, f"No claims before policy inception"
 

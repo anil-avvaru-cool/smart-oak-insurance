@@ -16,6 +16,21 @@ def current_utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _ts_to_iso(val: Any) -> str | None:
+    """Convert a Timestamp/datetime to ISO-8601 string, or None for NaT/null."""
+    if val is None:
+        return None
+    try:
+        if pd.isna(val):
+            return None
+    except (TypeError, ValueError):
+        pass
+    try:
+        return pd.Timestamp(val).isoformat()
+    except Exception:
+        return None
+
+
 def generate_feature_snapshot(
     record_id: str,
     record_type: str,
@@ -34,30 +49,43 @@ def generate_feature_snapshot(
     }
 
 
+_DATETIME_NOTE = "ISO-8601 audit datetimes for regulatory replay. Not features."
+
+
 def build_quote_snapshot(quote_payload: dict) -> dict:
     quote_id = quote_payload.get("quote_id", "quote-unknown")
     state = quote_payload.get("state", "UNKNOWN")
     features = build_quote_feature_vector(quote_payload)
-    return generate_feature_snapshot(
+    snap = generate_feature_snapshot(
         record_id=quote_id,
         record_type="quote",
         features=features,
         state=state,
         regulatory_mask_applied=True,
     )
+    # DEC-013 Phase 5: audit datetime envelope fields for regulatory replay
+    snap["quote_requested_at"] = _ts_to_iso(quote_payload.get("quote_requested_at"))
+    snap["quote_completed_at"] = _ts_to_iso(quote_payload.get("quote_completed_at"))
+    snap["_datetime_note"] = _DATETIME_NOTE
+    return snap
 
 
 def build_claim_snapshot(claim_payload: dict, underwriting_features: dict | None = None) -> dict:
     claim_id = claim_payload.get("claim_id", "claim-unknown")
     state = claim_payload.get("state", "UNKNOWN")
     features = build_claim_feature_vector(claim_payload, underwriting_features)
-    return generate_feature_snapshot(
+    snap = generate_feature_snapshot(
         record_id=claim_id,
         record_type="claim",
         features=features,
         state=state,
         regulatory_mask_applied=False,
     )
+    # DEC-013 Phase 5: audit datetime envelope fields for regulatory replay
+    snap["fnol_submitted_at"] = _ts_to_iso(claim_payload.get("fnol_submitted_at"))
+    snap["loss_event_datetime"] = _ts_to_iso(claim_payload.get("loss_event_datetime"))
+    snap["_datetime_note"] = _DATETIME_NOTE
+    return snap
 
 
 def _sanitize_nans(obj: Any) -> Any:

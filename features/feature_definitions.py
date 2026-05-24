@@ -74,9 +74,13 @@ def build_claim_feature_vector(claim_payload: dict, underwriting_features: dict 
         underwriting_features = {}
 
     features: FeatureVector = {
+        # DEC-013: policy_inception_days = (loss_event_datetime.date - quote_completed_at.date).days
+        # authoritative derivation lives in generator.py (generation time) and offline_pipeline.py (post-entity-resolution)
         "policy_inception_days": int(claim_payload.get("policy_inception_days", 0) or 0),
         "prior_claims_count": int(claim_payload.get("prior_claims_count", 0) or 0),
         "reported_injury_count": int(claim_payload.get("reported_injury_count", 0) or 0),
+        # DEC-013: reporting_delay_days = (fnol_submitted_at - loss_event_datetime).days
+        # never independently sampled — always derived from source datetimes
         "reporting_delay_days": int(claim_payload.get("reporting_delay_days", 0) or 0),
         "attorney_present": bool(claim_payload.get("attorney_present", False)),
         "submission_hour": int(claim_payload.get("submission_hour", 0) or 0),

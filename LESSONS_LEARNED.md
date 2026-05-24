@@ -5,3 +5,4 @@
 - Kaggle for practice and AWS for final inference deployment
 - .env file copied from windows to wsl, not able to connect to neo4j due to invalid line endings
  use this command to fix all windows to linux and save troubleshooting time, git config --global core.autocrlf input
+ - Change dependency to "xgboost>=2.0" from xgboost-cpu>=2.0 to support GPU in AWS/cloud deployments
