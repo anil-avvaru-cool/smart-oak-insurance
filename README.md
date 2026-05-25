@@ -42,6 +42,7 @@ sudo rm -rf ./data/raw/* ./data/processed/*
 # Run all in single command
 docker compose run --rm app python main.py --generate-data --resolve-entities --build-graph --compute-graph-features --run-offline-pipeline --validate-data
 docker compose run --rm app python main.py --train-risk-model
+docker compose run --rm app python main.py --calibrate-risk-model
 
 uv run -m main --generate-data --resolve-entities --build-graph --compute-graph-features --run-offline-pipeline --validate-data
 uv run -m main --train-risk-model
@@ -50,8 +51,8 @@ uv run -m main --calibrate-risk-model
 # Maintenance
 
 # To create permissions for current user
-sudo chown -R $USER:$USER /path/to/directory
-chmod -R u+rwx /path/to/directory
+sudo chown -R $USER:$USER ./data
+chmod -R u+rwx ./data
 
 
 # Delete existing graph with constraints

@@ -24,3 +24,8 @@ UNCONFIRMED_FRAUD_RATE = 0.20
 PSI_REFERENCE_VERSION = "v1.0.0"
 PSI_CURRENT_WINDOW_DAYS = 14
 PSI_MIN_RECORDS = 500
+
+# Champion-Challenger rollout config (monitoring/champion_challenger.py — CC-3)
+# 0 = shadow-only (no live traffic to challenger); set to 10 / 25 / 50 / 100 during phased rollout
+CC_TRAFFIC_SPLIT_PCT: int = 0
+CC_ROLLOUT_STAGES: list[int] = [10, 25, 50, 100]

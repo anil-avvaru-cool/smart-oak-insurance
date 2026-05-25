@@ -454,6 +454,68 @@ def _run_dataset_psi(
     )
 
 
+# ── JSON serialization ───────────────────────────────────────────────────────
+
+
+def report_to_dict(report: PSIDatasetReport) -> dict:
+    """Convert a PSIDatasetReport to a JSON-serializable dict."""
+
+    def _ts(t: pd.Timestamp) -> str:
+        return t.isoformat()
+
+    def _bin(b: BinDetail) -> dict:
+        return {
+            "bin_label": b.bin_label,
+            "ref_count": b.ref_count,
+            "curr_count": b.curr_count,
+            "ref_fraction": b.ref_fraction,
+            "curr_fraction": b.curr_fraction,
+            "psi_contribution": b.psi_contribution,
+        }
+
+    def _feature(r: PSIFeatureResult) -> dict:
+        return {
+            "feature": r.feature,
+            "psi": r.psi,
+            "status": r.status,
+            "n_reference": r.n_reference,
+            "n_current": r.n_current,
+            "null_fraction_reference": r.null_fraction_reference,
+            "null_fraction_current": r.null_fraction_current,
+            "bins": [_bin(b) for b in r.bins],
+        }
+
+    label = None
+    if report.label_window is not None:
+        lw = report.label_window
+        label = {
+            "as_of": _ts(lw.as_of),
+            "total_claims_in_window": lw.total_claims_in_window,
+            "fraud_claims_in_window": lw.fraud_claims_in_window,
+            "confirmed_any": lw.confirmed_any,
+            "confirmed_90d": lw.confirmed_90d,
+            "confirmed_180d": lw.confirmed_180d,
+            "confirmation_rate_any": lw.confirmation_rate_any,
+            "confirmation_rate_90d": lw.confirmation_rate_90d,
+            "confirmation_rate_180d": lw.confirmation_rate_180d,
+        }
+
+    return {
+        "dataset": report.dataset,
+        "reference_version": report.reference_version,
+        "current_window_days": report.current_window_days,
+        "current_window_start": _ts(report.current_window_start),
+        "current_window_end": _ts(report.current_window_end),
+        "n_reference": report.n_reference,
+        "n_current": report.n_current,
+        "max_psi": report.max_psi,
+        "champion_challenger_triggered": report.champion_challenger_triggered,
+        "generated_at": _ts(report.generated_at),
+        "label_window": label,
+        "feature_results": [_feature(r) for r in report.feature_results],
+    }
+
+
 # ── Public entry point ───────────────────────────────────────────────────────
 
 

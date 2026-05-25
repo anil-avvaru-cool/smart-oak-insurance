@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 
 from dotenv import load_dotenv
@@ -22,8 +23,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--compute-graph-features", action="store_true", help="Compute graph features and update claims data")
     parser.add_argument("--run-offline-pipeline", action="store_true", help="Build offline feature snapshots from quotes and claims parquet files")
     parser.add_argument("--validate-data", action="store_true", help="Validate generated datasets")
+    parser.add_argument("--drift-check", action="store_true", help="Compute PSI drift for quotes and claims; print JSON report to stdout; auto-starts shadow scoring if champion-challenger is triggered")
     parser.add_argument("--train-risk-model", action="store_true", help="Train Stage 2 Hurdle Model (frequency + severity) and write models to data/processed/risk_models/")
     parser.add_argument("--calibrate-risk-model", action="store_true", help="Stage 3: fit Platt scaling on frequency model + bias correction on severity model")
+    parser.add_argument("--compare-gini", action="store_true", help="CC-2: compare challenger vs champion Gini on accumulated shadow cohort; prints pass/fail with delta")
+    parser.add_argument("--promote-challenger", action="store_true", help="CC-4: promote challenger model artifacts to champion slot; archives previous champion with timestamp suffix")
+    parser.add_argument("--shap-check", action="store_true", help="SH-4: print SHAP share comparison for the two most recent snapshots")
     return parser
 
 
@@ -36,6 +41,87 @@ def main() -> None:
         print(f"Generated {len(quotes_df)} quotes and {len(claims_df)} claims")
         if not (args.resolve_entities or args.reset_graph or args.build_graph or args.compute_graph_features or args.run_offline_pipeline or args.validate_data):
             return
+
+    if args.drift_check:
+        from monitoring.psi_drift import run_drift_check, report_to_dict
+        import pandas as pd
+        reports = run_drift_check()
+        payload = {name: report_to_dict(r) for name, r in reports.items()}
+        RISK_MODELS_DIR.mkdir(parents=True, exist_ok=True)
+        ts = pd.Timestamp.now().strftime("%Y%m%dT%H%M%S")
+        out_path = RISK_MODELS_DIR / f"drift_report_{ts}.json"
+        out_path.write_text(json.dumps(payload, indent=2))
+        print(json.dumps(payload, indent=2))
+        print(f"\nDrift report saved → {out_path}")
+
+        # CC-5: auto-start shadow scoring when drift triggers the champion-challenger loop
+        cc_triggered = any(r.champion_challenger_triggered for r in reports.values())
+        if cc_triggered:
+            chal_model_path = RISK_MODELS_DIR / "frequency_model_challenger.json"
+            if chal_model_path.exists():
+                from monitoring.champion_challenger import score_shadow
+                try:
+                    shadow_path = score_shadow(
+                        quotes_path=QUOTES_OUTPUT,
+                        models_dir=RISK_MODELS_DIR,
+                        output_dir=RISK_MODELS_DIR,
+                        triggered_by="drift_check",
+                    )
+                    print(f"\nChampion-challenger triggered — shadow scoring complete → {shadow_path}")
+                except Exception as exc:
+                    print(f"\nChampion-challenger triggered — shadow scoring failed: {exc}")
+            else:
+                print(
+                    "\nChampion-challenger triggered — no challenger model found. "
+                    "Train a new model and save as frequency_model_challenger.json to begin shadow scoring."
+                )
+        return
+
+    if args.compare_gini:
+        from monitoring.champion_challenger import compare_gini
+        result = compare_gini(
+            quotes_path=QUOTES_OUTPUT,
+            models_dir=RISK_MODELS_DIR,
+            output_dir=RISK_MODELS_DIR,
+        )
+        status = "PASS" if result["passed"] else "FAIL"
+        print(f"Gini comparison [{status}]")
+        print(f"  champion_gini  = {result['champion_gini']}")
+        print(f"  challenger_gini = {result['challenger_gini']}")
+        print(f"  delta           = {result['delta']:+.4f}  (threshold >= {result['gini_pass_delta_threshold']})")
+        print(f"  n_records       = {result['n_records']}  ({result['n_shadow_files']} shadow files)")
+        return
+
+    if args.promote_challenger:
+        from monitoring.champion_challenger import promote_challenger
+        result = promote_challenger(models_dir=RISK_MODELS_DIR, output_dir=RISK_MODELS_DIR)
+        print(f"Promotion complete (ts={result['ts']})")
+        print(f"  Promoted : {result['promoted']}")
+        print(f"  Archived : {result['archived']}")
+        if result["missing_challenger"]:
+            print(f"  WARNING  — missing challenger artifacts skipped: {result['missing_challenger']}")
+        return
+
+    if args.shap_check:
+        from monitoring.shap_monitor import compare_shap_snapshots
+        result = compare_shap_snapshots(output_dir=RISK_MODELS_DIR)
+        print(f"SHAP check: {result['previous_snapshot']}  →  {result['current_snapshot']}")
+        print(f"  max feature : {result['max_shap_share_feature']}  ({result['max_shap_share']:.1%} share)")
+        print(f"  brittleness : {'WARNING' if result['brittleness_warning'] else 'OK'}")
+        if result["warnings"]:
+            for w in result["warnings"]:
+                print(f"  ⚠  {w}")
+        print()
+        print(f"  {'Feature':<40} {'Prev':>8} {'Curr':>8} {'Delta':>8}  {'Rank shift':>10}")
+        print(f"  {'-'*40} {'-'*8} {'-'*8} {'-'*8}  {'-'*10}")
+        for row in result["feature_comparison"]:
+            shift = row["rank_shift"]
+            shift_str = f"+{shift}" if shift > 0 else str(shift)
+            print(
+                f"  {row['feature']:<40} {row['prev_share']:>8.1%} {row['curr_share']:>8.1%}"
+                f" {row['delta']:>+8.1%}  {shift_str:>10}"
+            )
+        return
 
     if args.resolve_entities:
         resolve_vehicles()
@@ -100,6 +186,20 @@ def main() -> None:
         hurdle_metrics = evaluate_hurdle(QUOTES_OUTPUT, RISK_MODELS_DIR)
         print(f"  Hurdle Gini={hurdle_metrics['hurdle_gini']}  mean_risk=${hurdle_metrics['risk_score_mean']:,.0f}  P95=${hurdle_metrics['risk_score_p95']:,.0f}")
         print(f"Models written to {RISK_MODELS_DIR}")
+
+        # SH-3: auto-compute SHAP snapshot after every training run
+        print("Stage 2d — computing SHAP snapshot…")
+        try:
+            from monitoring.shap_monitor import write_shap_snapshot
+            shap_path = write_shap_snapshot(
+                quotes_path=QUOTES_OUTPUT,
+                models_dir=RISK_MODELS_DIR,
+                output_dir=RISK_MODELS_DIR,
+            )
+            print(f"  SHAP snapshot → {shap_path}")
+        except Exception as exc:
+            print(f"  SHAP snapshot failed (non-fatal): {exc}")
+
         if not (args.calibrate_risk_model or args.validate_data):
             return
 
