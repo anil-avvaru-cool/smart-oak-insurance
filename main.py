@@ -48,11 +48,20 @@ def main() -> None:
 
     if args.purge_drift_logs:
         import glob as _glob
-        reports_found = sorted(_glob.glob(str(RISK_MODELS_DIR / "drift_report_*.json")))
-        to_delete = reports_found[: max(0, len(reports_found) - args.keep)]
-        for p in to_delete:
-            Path(p).unlink()
-        print(f"Purged {len(to_delete)} drift report(s); {len(reports_found) - len(to_delete)} retained")
+        _archived_dir = RISK_MODELS_DIR / "archived"
+        _patterns = ["drift_report_*.json", "challenger_predictions_*.parquet"]
+        total_deleted = 0
+        for _pat in _patterns:
+            _files = sorted(
+                _glob.glob(str(RISK_MODELS_DIR / _pat)) +
+                (_glob.glob(str(_archived_dir / _pat)) if _archived_dir.exists() else [])
+            )
+            _to_delete = _files[: max(0, len(_files) - args.keep)]
+            for p in _to_delete:
+                Path(p).unlink()
+                total_deleted += 1
+            print(f"  {_pat}: {len(_to_delete)} deleted, {len(_files) - len(_to_delete)} retained")
+        print(f"Purged {total_deleted} file(s) total ({args.keep} most recent of each type kept)")
         return
 
     if args.drift_check:
@@ -73,11 +82,29 @@ def main() -> None:
             payload["concept_drift"] = {"error": str(exc)}
 
         RISK_MODELS_DIR.mkdir(parents=True, exist_ok=True)
+        _archived_dir = RISK_MODELS_DIR / "archived"
+        _archived_dir.mkdir(exist_ok=True)
+        for _old in RISK_MODELS_DIR.glob("drift_report_*.json"):
+            _old.rename(_archived_dir / _old.name)
+
         ts = pd.Timestamp.now().strftime("%Y%m%dT%H%M%S")
         out_path = RISK_MODELS_DIR / f"drift_report_{ts}.json"
         out_path.write_text(json.dumps(payload, indent=2))
-        print(json.dumps(payload, indent=2))
-        print(f"\nDrift report saved → {out_path}")
+
+        # Print concise summary instead of full JSON
+        print("Drift check summary")
+        print("=" * 40)
+        for name, rep in reports.items():
+            status = "TRIGGERED" if rep.champion_challenger_triggered else "OK"
+            top = sorted(rep.feature_results, key=lambda r: r.psi, reverse=True)[:3]
+            top_str = ", ".join(f"{r.feature}={r.psi:.3f}" for r in top)
+            print(f"  [{name}] cc={status}  top PSI: {top_str}")
+        cd = payload.get("concept_drift", {})
+        if "error" not in cd:
+            lag = cd.get("label_lag") or {}
+            gini = cd.get("gini_trend") or {}
+            print(f"  [concept_drift] label_lag={lag.get('lag_days', 'n/a')}d  gini={gini.get('gini', 'n/a')}")
+        print(f"\nFull report → {out_path}")
 
         # CC-5: auto-start shadow scoring when drift triggers the champion-challenger loop
         cc_triggered = any(r.champion_challenger_triggered for r in reports.values())

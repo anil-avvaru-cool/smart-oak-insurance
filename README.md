@@ -60,7 +60,7 @@ docker compose run --rm app python main.py --calibrate-risk-model
   # 4. Restore original data
   uv run python scripts/inject_drift.py --restore
 
-
+uv run -m main --purge-drift-logs
 docker compose run --rm app python main.py --drift-check
 docker compose run --rm app python main.py --compare-gini
 

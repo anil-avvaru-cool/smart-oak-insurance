@@ -148,6 +148,11 @@ def score_shadow(
     )
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    archived_dir = output_dir / "archived"
+    archived_dir.mkdir(exist_ok=True)
+    for old in output_dir.glob("challenger_predictions_*.parquet"):
+        shutil.move(str(old), archived_dir / old.name)
+
     ts_str = ts.strftime("%Y%m%dT%H%M%S%f")[:17]
     out_path = output_dir / f"challenger_predictions_{ts_str}.parquet"
     out.to_parquet(out_path, index=False)
@@ -185,7 +190,11 @@ def compare_gini(
     Raises FileNotFoundError if no shadow files exist.
     Raises ValueError if too few records or single-class cohort.
     """
-    shadow_files = sorted(output_dir.glob("challenger_predictions_*.parquet"))
+    archived_dir = output_dir / "archived"
+    shadow_files = sorted(
+        list(output_dir.glob("challenger_predictions_*.parquet")) +
+        list(archived_dir.glob("challenger_predictions_*.parquet") if archived_dir.exists() else [])
+    )
     if not shadow_files:
         raise FileNotFoundError(
             "No shadow prediction files found. Run --drift-check to accumulate shadow data."
