@@ -44,9 +44,30 @@ docker compose run --rm app python main.py --generate-data --resolve-entities --
 docker compose run --rm app python main.py --train-risk-model
 docker compose run --rm app python main.py --calibrate-risk-model
 
+# 1. Copy champion as challenger (one-time setup)
+  cp data/processed/risk_models/frequency_model.json \
+     data/processed/risk_models/frequency_model_challenger.json
+  cp data/processed/risk_models/frequency_calibration.json \
+     data/processed/risk_models/frequency_calibration_challenger.json
+
+  # 2. Inject drift
+  uv run python scripts/inject_drift.py
+
+  # 3. Run the pipeline
+  uv run -m main --drift-check      # triggers CC, writes challenger_predictions_*.parquet
+  uv run -m main --compare-gini
+
+  # 4. Restore original data
+  uv run python scripts/inject_drift.py --restore
+
+
+docker compose run --rm app python main.py --drift-check
+docker compose run --rm app python main.py --compare-gini
+
 uv run -m main --generate-data --resolve-entities --build-graph --compute-graph-features --run-offline-pipeline --validate-data
-uv run -m main --train-risk-model
-uv run -m main --calibrate-risk-model
+uv run -m main --train-risk-model --calibrate-risk-model 
+uv run -m main --drift-check
+  --shap-check --as-of 2026-5-24
 
 # Maintenance
 

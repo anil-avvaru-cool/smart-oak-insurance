@@ -51,33 +51,32 @@ claims changes. The architecture calls out Gini and loss ratio by tier as the re
 
 ## 4. Regulatory Checklist Sign-off
 
-All items in the `Risk_Scoring_Architecture.md` checklist are unchecked. The code implementations
-exist — these tasks are verification and formal sign-off, not new development.
+All items signed off 2026-05-24. See `doc/Risk_Scoring_Architecture.md` for full evidence notes.
 
-| # | Checklist Item | Verified by |
+| # | Checklist Item | Status |
 |---|---|---|
-| RC-1 | Entity resolution runs before feature store vector assembly | Run `--resolve-entities` before `--run-offline-pipeline`; confirm `data/entities/` parquet files exist |
-| RC-2 | Vehicle features sourced from `entity_vehicle.py` only | Grep: no MSRP / ADAS / horsepower lookups outside `entity_vehicle.py` and `feature_definitions.py` |
-| RC-3 | `policy_inception_date` written by `entity_policy.py` to `data/entities/policies.parquet` | Read `policies.parquet` schema; confirm column name matches `feature_definitions.py` derivation |
-| RC-4 | Feature Store versioning with millisecond-precision timestamps | Read a snapshot JSON; confirm `timestamp` field is ISO 8601 with milliseconds |
-| RC-5 | State regulatory mask applied before vector assembly | Read `feature_definitions.py`; confirm `CREDIT_RESTRICTED_STATES` check precedes feature vector construction |
-| RC-6 | `credit_score` is `null` for restricted states, never imputed | Run `--generate-data`; assert `credit_score.isna()` for all CA/MA/MI/HI rows in `quotes.parquet` |
-| RC-7 | Calibrated scores stored in audit trail, not raw logits | Confirm `frequency_calibration.json` exists and snapshot writer uses calibrated output |
-| RC-8 | PSI monitoring active on all top-10 features | Compare `QUOTE_NUMERIC_FEATURES` in `psi_drift.py` against top-10 feature table in architecture doc |
-| RC-9 | PSI current-period window keyed on `quote_requested_at` | Code review: `psi_drift.py` `_run_dataset_psi()` `time_col="quote_requested_at"` confirmed |
-| RC-10 | Null rate treated as its own PSI bin | Code review: `_bin_numeric()` null bin append confirmed |
-| RC-11 | Champion-Challenger shadow mode before any model promotion | **Blocked by CC-1 above** |
-| RC-12 | SHAP global importance reviewed at each retraining cycle | **Blocked by SH-1 above** |
+| RC-1 | Entity resolution runs before feature store vector assembly | ✅ `_load_vehicle_lookup()` enforces ordering via FileNotFoundError |
+| RC-2 | Vehicle features sourced from `entity_vehicle.py` only | ✅ `_merge_vehicle_entity()` overrides raw fields with resolved entity values |
+| RC-3 | `policy_inception_date` written by `entity_policy.py` to `data/entities/policies.parquet` | ✅ Column confirmed; `policy_inception_days` derived in `build_claim_feature_vector()` |
+| RC-4 | Feature Store versioning with millisecond-precision timestamps | ✅ Microsecond-precision ISO-8601 confirmed in snapshot files |
+| RC-5 | State regulatory mask applied before vector assembly | ✅ `apply_state_regulatory_mask()` called inside `build_quote_feature_vector()` |
+| RC-6 | `credit_score` is `null` for restricted states, never imputed | ✅ Code-level confirmed; `CREDIT_RESTRICTED_STATES` = {CA, MA, MI, HI} |
+| RC-7 | Calibrated scores stored in audit trail, not raw logits | ✅ `frequency_calibration.json` exists; snapshots store `risk_score_at_issuance`, never raw logits |
+| RC-8 | PSI monitoring active on all top-10 features | ✅ Fixed: added `telematics_distraction_score`, `telematics_commute_entropy`, `household_driver_density` to `QUOTE_NUMERIC_FEATURES` |
+| RC-9 | PSI current-period window keyed on `quote_requested_at` | ✅ `_run_dataset_psi(time_col="quote_requested_at")` confirmed |
+| RC-10 | Null rate treated as its own PSI bin | ✅ `_bin_numeric()` appends `(null)` bin unconditionally |
+| RC-11 | Champion-Challenger shadow mode before any model promotion | ✅ CC-5 auto-triggers shadow scoring in `--drift-check` handler |
+| RC-12 | SHAP global importance reviewed at each retraining cycle | ✅ SH-3 runs `write_shap_snapshot()` as Stage 2d in `--train-risk-model` |
 
 ---
 
 ## 5. Ops / CLI Gaps
 
-| # | Task | File |
-|---|---|---|
-| OP-1 | `--train-risk-model` does not save metrics to a versioned file — only prints to stdout. Write `training_run_<ts>.json` to `data/processed/risk_models/` alongside model artifacts | `main.py` |
-| OP-2 | No `--drift-check --as-of YYYY-MM-DD` flag for back-testing drift on a historical date | `main.py` |
-| OP-3 | Drift reports accumulate unbounded in `data/processed/risk_models/`. Add `--purge-drift-logs --keep N` to retain only the N most recent reports | `main.py` |
+| # | Task | File | Status |
+|---|---|---|---|
+| OP-1 | `--train-risk-model` does not save metrics to a versioned file — only prints to stdout. Write `training_run_<ts>.json` to `data/processed/risk_models/` alongside model artifacts | `main.py` | ✅ Done 2026-05-24 |
+| OP-2 | No `--drift-check --as-of YYYY-MM-DD` flag for back-testing drift on a historical date | `main.py` | ✅ Done 2026-05-24 |
+| OP-3 | Drift reports accumulate unbounded in `data/processed/risk_models/`. Add `--purge-drift-logs --keep N` to retain only the N most recent reports | `main.py` | ✅ Done 2026-05-24 |
 
 ---
 

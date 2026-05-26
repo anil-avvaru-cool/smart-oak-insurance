@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -29,6 +30,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--compare-gini", action="store_true", help="CC-2: compare challenger vs champion Gini on accumulated shadow cohort; prints pass/fail with delta")
     parser.add_argument("--promote-challenger", action="store_true", help="CC-4: promote challenger model artifacts to champion slot; archives previous champion with timestamp suffix")
     parser.add_argument("--shap-check", action="store_true", help="SH-4: print SHAP share comparison for the two most recent snapshots")
+    parser.add_argument("--as-of", metavar="YYYY-MM-DD", help="OP-2: back-test --drift-check as of a historical date (ISO format)")
+    parser.add_argument("--purge-drift-logs", action="store_true", help="OP-3: delete old drift reports, keeping only the N most recent")
+    parser.add_argument("--keep", type=int, default=10, metavar="N", help="OP-3: number of drift reports to retain (default: 10)")
     return parser
 
 
@@ -42,11 +46,32 @@ def main() -> None:
         if not (args.resolve_entities or args.reset_graph or args.build_graph or args.compute_graph_features or args.run_offline_pipeline or args.validate_data):
             return
 
+    if args.purge_drift_logs:
+        import glob as _glob
+        reports_found = sorted(_glob.glob(str(RISK_MODELS_DIR / "drift_report_*.json")))
+        to_delete = reports_found[: max(0, len(reports_found) - args.keep)]
+        for p in to_delete:
+            Path(p).unlink()
+        print(f"Purged {len(to_delete)} drift report(s); {len(reports_found) - len(to_delete)} retained")
+        return
+
     if args.drift_check:
         from monitoring.psi_drift import run_drift_check, report_to_dict
+        from monitoring.concept_drift import run_concept_drift_check
         import pandas as pd
-        reports = run_drift_check()
+        as_of = pd.Timestamp(args.as_of) if args.as_of else None
+        reports = run_drift_check(as_of=as_of)
         payload = {name: report_to_dict(r) for name, r in reports.items()}
+
+        # CD-4: include concept drift summary (non-fatal; reuses label_window from claims report)
+        try:
+            concept_drift = run_concept_drift_check(
+                label_window=reports["claims"].label_window,
+            )
+            payload["concept_drift"] = concept_drift
+        except Exception as exc:
+            payload["concept_drift"] = {"error": str(exc)}
+
         RISK_MODELS_DIR.mkdir(parents=True, exist_ok=True)
         ts = pd.Timestamp.now().strftime("%Y%m%dT%H%M%S")
         out_path = RISK_MODELS_DIR / f"drift_report_{ts}.json"
@@ -186,6 +211,20 @@ def main() -> None:
         hurdle_metrics = evaluate_hurdle(QUOTES_OUTPUT, RISK_MODELS_DIR)
         print(f"  Hurdle Gini={hurdle_metrics['hurdle_gini']}  mean_risk=${hurdle_metrics['risk_score_mean']:,.0f}  P95=${hurdle_metrics['risk_score_p95']:,.0f}")
         print(f"Models written to {RISK_MODELS_DIR}")
+
+        # OP-1: write versioned training run metrics file
+        import pandas as pd
+        ts = pd.Timestamp.now().strftime("%Y%m%dT%H%M%S")
+        training_run = {
+            "ts": ts,
+            "frequency": freq_metrics,
+            "severity": sev_metrics,
+            "hurdle": hurdle_metrics,
+        }
+        RISK_MODELS_DIR.mkdir(parents=True, exist_ok=True)
+        run_path = RISK_MODELS_DIR / f"training_run_{ts}.json"
+        run_path.write_text(json.dumps(training_run, indent=2))
+        print(f"Training run metrics → {run_path}")
 
         # SH-3: auto-compute SHAP snapshot after every training run
         print("Stage 2d — computing SHAP snapshot…")

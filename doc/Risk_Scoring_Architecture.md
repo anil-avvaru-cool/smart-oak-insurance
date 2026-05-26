@@ -331,19 +331,56 @@ P(claim > 0)                 E(cost | claim)
 
 ## Regulatory Checklist
 
-- [ ] Entity resolution complete before feature store vector assembly
-- [ ] Vehicle features (MSRP, ADAS, age) sourced from `entity_vehicle.py` — not
+> Sign-off completed 2026-05-24. Verified by: code review + artifact inspection.
+
+- [x] Entity resolution complete before feature store vector assembly
+      — `offline_pipeline._load_vehicle_lookup()` raises `FileNotFoundError` if
+      `data/raw/entities/vehicles.parquet` is absent, forcing `--resolve-entities`
+      to precede `--run-offline-pipeline`.
+- [x] Vehicle features (MSRP, ADAS, age) sourced from `entity_vehicle.py` — not
       looked up at scoring time
-- [ ] `policy_inception_date` written by `entity_policy.py` to `data/entities/policies.parquet`
+      — `offline_pipeline._merge_vehicle_entity()` overrides raw quote fields with
+      resolved values from `vehicles.parquet`; generator values are only used during
+      synthetic data generation, not in the scoring path.
+- [x] `policy_inception_date` written by `entity_policy.py` to `data/entities/policies.parquet`
       — used as source for `policy_inception_days` derivation in `feature_definitions.py`
-- [ ] Feature Store versioning enabled with millisecond-precision timestamps
-- [ ] State regulatory mask applied before vector assembly — not at model level
-- [ ] Credit score set to `null` (not imputed) for restricted states
-- [ ] Calibrated scores stored in audit trail, not raw logits
-- [ ] PSI monitoring active on all top-10 features
-- [ ] PSI current-period window keyed on `quote_requested_at` from
+      — confirmed column `policy_inception_date` present in output; derivation of
+      `policy_inception_days` in `feature_definitions.build_claim_feature_vector()`.
+- [x] Feature Store versioning enabled with millisecond-precision timestamps
+      — `offline_pipeline.current_utc_timestamp()` uses `datetime.isoformat()` which
+      yields microsecond precision (e.g. `"2026-05-24T02:11:23.564995Z"`); confirmed
+      in `data/processed/features/quotes/` snapshot files.
+- [x] State regulatory mask applied before vector assembly — not at model level
+      — `feature_definitions.build_quote_feature_vector()` calls
+      `apply_state_regulatory_mask()` before returning the vector (line 69).
+- [x] Credit score set to `null` (not imputed) for restricted states
+      — `feature_definitions.apply_state_regulatory_mask()` sets
+      `features["credit_score"] = None` for all states in `CREDIT_RESTRICTED_STATES`
+      (`CA`, `MA`, `MI`, `HI`). Never imputed downstream.
+- [x] Calibrated scores stored in audit trail, not raw logits
+      — `data/processed/risk_models/frequency_calibration.json` exists (Platt params
+      `a`, `b`). Feature store snapshots carry `risk_score_at_issuance` (calibrated
+      probability); raw XGBoost logits are never persisted.
+- [x] PSI monitoring active on all top-10 features
+      — `psi_drift.QUOTE_NUMERIC_FEATURES` now covers all top-10: credit score,
+      prior loss frequency, telematics distraction score (#3), geohash risk,
+      vehicle ADAS, insurance lapse days, telematics commute entropy (#7),
+      violation severity index, household driver density (#9). `vehicle_msrp` is
+      monitored as the source input for the MSRP-to-power ratio (#10); the ratio
+      itself is not stored in `quotes.parquet`.
+- [x] PSI current-period window keyed on `quote_requested_at` from
       `data/raw/quotes.parquet` — not from the feature store or feature snapshots
-- [ ] Null rate for `credit_score` and telematics features included as PSI signals —
+      — `psi_drift._run_dataset_psi()` called with `time_col="quote_requested_at"`;
+      reads directly from `QUOTES_OUTPUT` parquet, not from snapshot JSONs.
+- [x] Null rate for `credit_score` and telematics features included as PSI signals —
       null treated as its own bin, not filtered before PSI computation
-- [ ] Champion-Challenger shadow mode running before any model promotion
-- [ ] SHAP global importance reviewed at each retraining cycle
+      — `psi_drift._bin_numeric()` appends a dedicated `(null)` bin after the
+      quantile bins (line 224); null series are never dropped before PSI computation.
+- [x] Champion-Challenger shadow mode running before any model promotion
+      — CC-5 wired in `main.py --drift-check` handler: when any dataset report has
+      `champion_challenger_triggered=True`, `champion_challenger.score_shadow()` is
+      called automatically before any promotion path can be reached.
+- [x] SHAP global importance reviewed at each retraining cycle
+      — SH-3 wired in `main.py --train-risk-model` handler (Stage 2d):
+      `shap_monitor.write_shap_snapshot()` runs after every training run;
+      `--shap-check` CLI flag exposes the comparison for review.

@@ -58,6 +58,10 @@ QUOTE_NUMERIC_FEATURES: list[str] = [
     "geohash_risk_score",
     "risk_score_at_issuance",
     "vehicle_adas_score",
+    # top-10 features #3, #7, #9 — nullable telematics/density signals (RC-8)
+    "telematics_distraction_score",
+    "telematics_commute_entropy",
+    "household_driver_density",
 ]
 QUOTE_CATEGORICAL_FEATURES: list[str] = ["state", "policy_tier_at_issuance"]
 QUOTE_BOOLEAN_FEATURES: list[str] = ["telematics_enrolled"]
