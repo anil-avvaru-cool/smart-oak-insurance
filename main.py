@@ -33,6 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--as-of", metavar="YYYY-MM-DD", help="OP-2: back-test --drift-check as of a historical date (ISO format)")
     parser.add_argument("--purge-drift-logs", action="store_true", help="OP-3: delete old drift reports, keeping only the N most recent")
     parser.add_argument("--keep", type=int, default=10, metavar="N", help="OP-3: number of drift reports to retain (default: 10)")
+    parser.add_argument("--score-quote", metavar="JSON_PATH", help="Score a single quote from a JSON feature file; prints p_claim, e_cost_usd, risk_score, and top-5 SHAP reason codes")
     return parser
 
 
@@ -295,6 +296,31 @@ def main() -> None:
         print(f"Calibration artifacts written to {RISK_MODELS_DIR}")
         if not args.validate_data:
             return
+
+    if args.score_quote:
+        import pandas as pd
+        from underwriting.models.risk_scoring.hurdle_model import HurdleModel
+
+        quote_path = Path(args.score_quote)
+        if not quote_path.exists():
+            print(f"Error: {quote_path} not found")
+            return
+
+        payload = json.loads(quote_path.read_text())
+        df = pd.DataFrame([payload])
+        model = HurdleModel(RISK_MODELS_DIR)
+        result = model.score_with_components(df).iloc[0]
+        reason_codes = model.explain(df, top_n=5)[0]
+
+        print(f"p_claim      : {result['p_claim']:.4f}")
+        print(f"e_cost_usd   : ${result['e_cost_usd']:,.2f}")
+        print(f"risk_score   : ${result['risk_score']:,.2f}")
+        print(f"calibrated   : {model.calibration_applied}")
+        print("\nTop-5 SHAP reason codes (frequency model):")
+        for rc in reason_codes:
+            direction = "+" if rc["shap_pct"] > 0 else ""
+            print(f"  {rc['feature']:<40} {direction}{rc['shap_pct']:.1f}%")
+        return
 
     if args.validate_data:
         validate_data()

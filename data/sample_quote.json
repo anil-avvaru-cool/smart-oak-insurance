@@ -1,0 +1,21 @@
+{
+  "vehicle_msrp": 59056.25862490749,
+  "vehicle_power": 221.23352197513003,
+  "credit_score": 618,
+  "prior_loss_frequency": 0.3120508889187701,
+  "prior_loss_severity_avg": 8973.118147993138,
+  "insurance_lapse_days": 54,
+  "violation_severity_index": 3.252824558048973,
+  "household_driver_density": 3.4145170862712293,
+  "driver_age": 26,
+  "years_licensed": 0,
+  "vehicle_adas_score": 0.6554140361568728,
+  "vehicle_age_years": 3,
+  "geohash_risk_score": 0.40323509603414953,
+  "annual_mileage_estimate": 15572.002959063051,
+  "telematics_distraction_score": 0.5350812152451623,
+  "telematics_hard_brake_rate": 0.05881129432782428,
+  "telematics_crash_match": 0.3488136660423094,
+  "telematics_commute_entropy": 0.28071666410789864,
+  "telematics_enrolled": false
+}
