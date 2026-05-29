@@ -39,6 +39,47 @@ docker compose run --rm app python main.py --train-fraud-models
 docker compose run --rm app python main.py --score-claims
 ```
 
+## Label Quality & PU Learning (Section 5)
+
+Addresses the core problem: a meaningful fraction of "legitimate" training labels
+are actually undetected fraud, silently poisoning the negative class.
+
+```bash
+# Stage 5a: run label quality analysis (PU Learning + Confident Learning + label smoothing)
+docker compose run --rm app python main.py --label-quality
+
+# Optional: use a 180-day SIU confirmation window instead of the default 90-day
+docker compose run --rm app python main.py --label-quality --confirmed-window 180
+
+# Stage 5b: train XGBoost on PU-adjusted sample weights (requires --label-quality first)
+docker compose run --rm app python main.py --train-fraud-pu
+
+# Run both in sequence
+docker compose run --rm app python main.py --label-quality --train-fraud-pu
+```
+
+**Outputs** (written to `data/processed/fraud_models/`):
+
+| File | Contents |
+|---|---|
+| `pu_adjusted_labels.parquet` | Per-claim: `pu_score`, `is_fraud_soft`, `sample_weight`, `suspected_mislabel`, `confirmed_fraud` |
+| `label_quality_report.json` | `c_estimate` (label frequency), noise rate, suspected mislabel counts, OOF AUC |
+| `fraud_model_pu.json` | XGBoost retrained with PU-adjusted sample weights |
+| `fraud_metrics_pu.json` | AUC, Gini, AP for the PU-trained model |
+
+**Techniques implemented:**
+
+- **PU Learning (Elkan-Noto)** — treats all negatives as unlabeled, estimates the true label
+  frequency `c = P(s=1|y=1)`, and de-biases predictions: `P(y=1|x) = P(s=1|x) / c`
+- **Confident Learning** — OOF cross-validation identifies suspected mislabels via
+  off-diagonal disagreement in per-class probability thresholds (cleanlab-style, no
+  extra dependency)
+- **Label smoothing** — suspected mislabels receive soft target `0.5`; confirmed labels
+  become `1 - alpha` / `alpha` (default `alpha=0.05`)
+- **Delayed label pipeline** — confirmed fraud keyed on `fraud_confirmed_at` within a
+  configurable SIU confirmation window (`--confirmed-window`, default 90 days);
+  confirmed records receive sample weight `2.0`
+
 ## Champion-Challenger drift test
 
 ```bash

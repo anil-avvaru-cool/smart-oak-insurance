@@ -35,6 +35,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--keep", type=int, default=10, metavar="N", help="OP-3: number of drift reports to retain (default: 10)")
     parser.add_argument("--score-quote", metavar="JSON_PATH", help="Score a single quote from a JSON feature file; prints p_claim, e_cost_usd, risk_score, and top-5 SHAP reason codes")
     parser.add_argument("--train-fraud-models", action="store_true", help="Train Section-4 ensemble fraud scoring: XGBoost + Isolation Forest + stacking meta-learner")
+    parser.add_argument("--label-quality", action="store_true", help="Stage 5: run PU Learning + Confident Learning + label smoothing; writes pu_adjusted_labels.parquet + label_quality_report.json")
+    parser.add_argument("--train-fraud-pu", action="store_true", help="Stage 5b: train XGBoost fraud model on PU-adjusted sample weights (requires --label-quality to have been run first)")
+    parser.add_argument("--confirmed-window", type=int, default=90, metavar="DAYS", help="SIU confirmation window in days for --label-quality (default: 90)")
     parser.add_argument("--score-claim", metavar="JSON_PATH", help="Score a single claim JSON; prints fraud_score, CI, base model scores, and top-5 SHAP reason codes")
     return parser
 
@@ -346,6 +349,55 @@ def main() -> None:
         run_path = FRAUD_MODELS_DIR / f"fraud_training_run_{ts}.json"
         run_path.write_text(json.dumps(all_metrics, indent=2))
         print(f"Training run metrics → {run_path}")
+        if not (args.label_quality or args.train_fraud_pu or args.validate_data):
+            return
+
+    if args.label_quality:
+        from fraud.label_quality import build_pu_adjusted_dataset
+
+        print("Stage 5 — Label Quality & PU Learning")
+        print("  Techniques: PU Learning (Elkan-Noto) + Confident Learning + Label Smoothing")
+        report = build_pu_adjusted_dataset(
+            CLAIMS_OUTPUT,
+            QUOTES_OUTPUT,
+            FRAUD_MODELS_DIR,
+            confirmed_window_days=args.confirmed_window,
+        )
+        print(f"\nLabel quality report:")
+        print(f"  records           : {report['n_records']}")
+        print(f"  positives         : {report['n_positives']}  negatives: {report['n_negatives']}")
+        print(f"  confirmed fraud   : {report['n_confirmed_fraud']} (within {report['confirmed_window_days']}d window)")
+        print(f"  c_estimate        : {report['c_estimate']}  (P(labeled|true fraud) — PU label frequency)")
+        print(f"  noise rate (neg.) : {report['estimated_noise_rate_negatives']:.2%}  ({report['n_suspected_mislabel_negatives']} suspected mislabeled negatives)")
+        print(f"  high PU-score neg.: {report['n_high_pu_score_negatives']} (PU score > 0.5 despite label=0)")
+        print(f"  OOF AUC           : {report['oof_auc']}")
+        print(f"\nArtifacts written to {FRAUD_MODELS_DIR}")
+        print(f"  pu_adjusted_labels.parquet")
+        print(f"  label_quality_report.json")
+        if not (args.train_fraud_pu or args.validate_data):
+            return
+
+    if args.train_fraud_pu:
+        from fraud.train_xgb_fraud import train_with_pu_labels
+
+        pu_labels_path = FRAUD_MODELS_DIR / "pu_adjusted_labels.parquet"
+        if not pu_labels_path.exists():
+            print(f"Error: {pu_labels_path} not found — run --label-quality first")
+            return
+
+        print("Stage 5b — Training XGBoost on PU-adjusted sample weights…")
+        pu_metrics = train_with_pu_labels(CLAIMS_OUTPUT, QUOTES_OUTPUT, pu_labels_path, FRAUD_MODELS_DIR)
+        print(f"  [5b PU XGBoost]  AUC={pu_metrics['auc']}  Gini={pu_metrics['gini']}  AP={pu_metrics['average_precision']}")
+        print(f"  Model written to {FRAUD_MODELS_DIR / 'fraud_model_pu.json'}")
+
+        # Compare with standard model if it exists
+        std_metrics_path = FRAUD_MODELS_DIR / "fraud_metrics.json"
+        if std_metrics_path.exists():
+            std = json.loads(std_metrics_path.read_text())
+            delta_auc = pu_metrics["auc"] - std["auc"]
+            delta_gini = pu_metrics["gini"] - std["gini"]
+            sign = "+" if delta_auc >= 0 else ""
+            print(f"\n  vs. standard model:  ΔAUC={sign}{delta_auc:.4f}  ΔGini={sign}{delta_gini:.4f}")
         if not args.validate_data:
             return
 
