@@ -10,7 +10,7 @@ from data.entities import resolve_vehicles, resolve_persons, resolve_addresses, 
 from data.graph_builder import build_graph_from_claims, clear_graph
 from data.graph_features import compute_graph_features
 from data.validator import validate_data
-from data.config import CLAIMS_OUTPUT, OFFLINE_FEATURES_DIR, QUOTES_OUTPUT, RISK_MODELS_DIR
+from data.config import CLAIMS_OUTPUT, FRAUD_MODELS_DIR, OFFLINE_FEATURES_DIR, QUOTES_OUTPUT, RISK_MODELS_DIR
 
 load_dotenv()
 
@@ -34,6 +34,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--purge-drift-logs", action="store_true", help="OP-3: delete old drift reports, keeping only the N most recent")
     parser.add_argument("--keep", type=int, default=10, metavar="N", help="OP-3: number of drift reports to retain (default: 10)")
     parser.add_argument("--score-quote", metavar="JSON_PATH", help="Score a single quote from a JSON feature file; prints p_claim, e_cost_usd, risk_score, and top-5 SHAP reason codes")
+    parser.add_argument("--train-fraud-models", action="store_true", help="Train Section-4 ensemble fraud scoring: XGBoost + Isolation Forest + stacking meta-learner")
+    parser.add_argument("--score-claim", metavar="JSON_PATH", help="Score a single claim JSON; prints fraud_score, CI, base model scores, and top-5 SHAP reason codes")
     return parser
 
 
@@ -317,6 +319,59 @@ def main() -> None:
         print(f"risk_score   : ${result['risk_score']:,.2f}")
         print(f"calibrated   : {model.calibration_applied}")
         print("\nTop-5 SHAP reason codes (frequency model):")
+        for rc in reason_codes:
+            direction = "+" if rc["shap_pct"] > 0 else ""
+            print(f"  {rc['feature']:<40} {direction}{rc['shap_pct']:.1f}%")
+        return
+
+    if args.train_fraud_models:
+        from fraud.ensemble_fraud_scorer import train_ensemble
+
+        print("Stage 4a — training XGBoost fraud classifier (P(fraud | claim features))…")
+        print("Stage 4b — training Isolation Forest anomaly detector…")
+        print("Stage 4c — training stacking meta-learner (5-fold OOF)…")
+        all_metrics = train_ensemble(CLAIMS_OUTPUT, QUOTES_OUTPUT, FRAUD_MODELS_DIR)
+
+        xm = all_metrics["xgb_fraud"]
+        am = all_metrics["anomaly_detector"]
+        sm = all_metrics["stacking_meta_learner"]
+        print(f"\n  [4a XGBoost]  AUC={xm['auc']}  Gini={xm['gini']}  AP={xm['average_precision']}")
+        print(f"  [4b IF]       contamination={am['contamination']}  anomaly_p95={am['anomaly_score_p95']}")
+        print(f"  [4c Stacking] OOF AUC={sm['oof_auc']}  OOF Gini={sm['oof_gini']}")
+        print(f"\nFraud models written to {FRAUD_MODELS_DIR}")
+
+        import pandas as _pd
+        ts = _pd.Timestamp.now().strftime("%Y%m%dT%H%M%S")
+        FRAUD_MODELS_DIR.mkdir(parents=True, exist_ok=True)
+        run_path = FRAUD_MODELS_DIR / f"fraud_training_run_{ts}.json"
+        run_path.write_text(json.dumps(all_metrics, indent=2))
+        print(f"Training run metrics → {run_path}")
+        if not args.validate_data:
+            return
+
+    if args.score_claim:
+        import pandas as pd
+        from fraud.ensemble_fraud_scorer import EnsembleFraudScorer
+
+        claim_path = Path(args.score_claim)
+        if not claim_path.exists():
+            print(f"Error: {claim_path} not found")
+            return
+
+        payload = json.loads(claim_path.read_text())
+        df = pd.DataFrame([payload])
+        scorer = EnsembleFraudScorer(FRAUD_MODELS_DIR)
+        result = scorer.score(df).iloc[0]
+        reason_codes = scorer.explain(df, top_n=5)[0]
+
+        print(f"fraud_score  : {result['fraud_score']:.4f}")
+        print(f"CI           : [{result['ci_lower']:.4f}, {result['ci_upper']:.4f}]")
+        print(f"  p_xgb      : {result['p_xgb']:.4f}")
+        print(f"  p_anomaly  : {result['p_anomaly']:.4f}")
+        print(f"  p_nlp      : {result['p_nlp']:.4f}  (narrative proxy)")
+        print(f"  p_gnn      : {result['p_gnn']:.4f}  (stub — emerging)")
+        print(f"  p_vision   : {result['p_vision']:.4f}  (stub — emerging)")
+        print("\nTop-5 SHAP reason codes (XGBoost fraud model):")
         for rc in reason_codes:
             direction = "+" if rc["shap_pct"] > 0 else ""
             print(f"  {rc['feature']:<40} {direction}{rc['shap_pct']:.1f}%")

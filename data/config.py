@@ -12,6 +12,7 @@ QUOTES_OUTPUT = RAW_DATA_DIR / QUOTE_FILE_NAME
 CLAIMS_OUTPUT = RAW_DATA_DIR / CLAIM_FILE_NAME
 OFFLINE_FEATURES_DIR = PROCESSED_DATA_DIR / "features"
 RISK_MODELS_DIR = PROCESSED_DATA_DIR / "risk_models"
+FRAUD_MODELS_DIR = PROCESSED_DATA_DIR / "fraud_models"
 
 # DEC-013: generation date spread — quotes and claims are spread over this many days
 QUOTE_DATE_RANGE_DAYS = 365

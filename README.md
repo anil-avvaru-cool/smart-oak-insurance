@@ -35,6 +35,8 @@ docker compose run --rm app python main.py \
 ```bash
 docker compose run --rm app python main.py --train-risk-model
 docker compose run --rm app python main.py --calibrate-risk-model
+docker compose run --rm app python main.py --train-fraud-models
+docker compose run --rm app python main.py --score-claims
 ```
 
 ## Champion-Challenger drift test

@@ -32,7 +32,7 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["features*", "data*", "underwriting*", "monitoring*"]
+include = ["features*", "data*", "underwriting*", "monitoring*", "fraud*"]
 
 [dependency-groups]
 dev = [
