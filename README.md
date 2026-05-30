@@ -24,17 +24,14 @@ docker compose up -d neo4j redis   # wait ~30 s for Neo4j to become healthy
 # Wipe previous outputs (optional)
 sudo rm -rf ./data/raw/* ./data/processed/*
 
-docker compose run --rm app python main.py \
-  --generate-data --resolve-entities \
-  --build-graph --compute-graph-features \
-  --run-offline-pipeline --validate-data
+docker compose run --rm app python main.py --generate-data --resolve-entities \
+  --build-graph --compute-graph-features --run-offline-pipeline --validate-data
 ```
 
 ## Training
 
 ```bash
-docker compose run --rm app python main.py --train-risk-model
-docker compose run --rm app python main.py --calibrate-risk-model
+docker compose run --rm app python main.py --train-risk-model --calibrate-risk-model
 docker compose run --rm app python main.py --train-fraud-models
 docker compose run --rm app python main.py --score-claims
 ```

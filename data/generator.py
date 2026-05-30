@@ -215,7 +215,7 @@ def generate_claims(quotes_df: pd.DataFrame, seed: int = RANDOM_SEED + 1) -> pd.
             "graph_hop_distance": 999,
             "shared_attribute_count": 0,
             "attorney_centrality_score": 0.0,
-            "narrative_inconsistency_score": float(np.clip(rng.normal(archetype.narrative_inconsistency_mean, 0.16), 0.0, 1.0)),
+            "narrative_inconsistency_score": float(np.clip(rng.normal(archetype.narrative_inconsistency_mean, 0.20), 0.0, 1.0)),
             "narrative_complexity_score": float(np.clip(rng.normal(archetype.narrative_complexity_mean, 0.18), 0.0, 1.0)),
             "device_fingerprint_match": rng.random() < archetype.device_fingerprint_match_prob,
             "submission_channel": rng.choice(["mobile", "agent_portal", "web", "broker"], p=[0.4, 0.2, 0.3, 0.1]),
