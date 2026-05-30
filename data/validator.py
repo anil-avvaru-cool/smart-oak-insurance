@@ -525,16 +525,22 @@ def _check_graph_sentinel_coherence(claims_df: pd.DataFrame) -> None:
 
     if not fraud.empty:
         fraud_sentinel_pct = (fraud["graph_hop_distance"] == 999).mean() * 100
-        if fraud_sentinel_pct > 30:
-            print(f"  {_FAIL} {fraud_sentinel_pct:.1f}% of fraud claims have sentinel hop_distance=999 (graph poorly connected)")
-        else:
-            print(f"  {_PASS} fraud claims sentinel rate: {fraud_sentinel_pct:.1f}%")
+        # Fraud claims seeded the BFS and are reset to sentinel post-BFS to prevent
+        # label leakage (distance=0 directly encodes is_fraud=True). High sentinel
+        # rate for fraud is expected by design — not a connectivity signal.
+        print(f"  info: fraud claims sentinel rate: {fraud_sentinel_pct:.1f}% (expected high — seed nodes reset post-BFS)")
 
     if not legit.empty:
         legit_sentinel_pct = (legit["graph_hop_distance"] == 999).mean() * 100
-        print(f"  info: legit claims sentinel rate: {legit_sentinel_pct:.1f}% (expect > fraud rate)")
-        if not fraud.empty and legit_sentinel_pct < (fraud["graph_hop_distance"] == 999).mean() * 100:
-            print(f"  {_WARN} legit sentinel rate is lower than fraud rate (hop_distance signal may be inverted)")
+        fraud_sentinel_pct = (fraud["graph_hop_distance"] == 999).mean() * 100 if not fraud.empty else 100.0
+        # In a well-connected graph, non-fraud claims near fraud rings get low hop
+        # distances, so legit sentinel rate should be clearly below fraud sentinel rate.
+        if legit_sentinel_pct > 75:
+            print(f"  {_FAIL} {legit_sentinel_pct:.1f}% of non-fraud claims have sentinel hop_distance=999 (graph poorly connected to fraud entities)")
+        elif legit_sentinel_pct >= fraud_sentinel_pct:
+            print(f"  {_WARN} non-fraud sentinel rate ({legit_sentinel_pct:.1f}%) >= fraud sentinel rate ({fraud_sentinel_pct:.1f}%) — graph connectivity signal may be absent")
+        else:
+            print(f"  {_PASS} non-fraud sentinel rate: {legit_sentinel_pct:.1f}% (below fraud sentinel — graph connected)")
 
 
 def _check_temporal_integrity(quotes_df: pd.DataFrame, claims_df: pd.DataFrame) -> None:
