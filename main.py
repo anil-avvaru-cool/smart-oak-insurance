@@ -22,6 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--reset-graph", action="store_true", help="Delete all graph nodes/relationships and drop all constraints (use before --build-graph for a clean reload)")
     parser.add_argument("--build-graph", action="store_true", help="Build graph from claims data in Neo4j")
     parser.add_argument("--compute-graph-features", action="store_true", help="Compute graph features and update claims data")
+    parser.add_argument("--graph-seed-cutoff", metavar="YYYY-MM-DD", help="ISO date: seed BFS hop distances only from fraud claims before this date (prevents label leakage; use the same date as your train/test split)")
     parser.add_argument("--run-offline-pipeline", action="store_true", help="Build offline feature snapshots from quotes and claims parquet files")
     parser.add_argument("--validate-data", action="store_true", help="Validate generated datasets")
     parser.add_argument("--drift-check", action="store_true", help="Compute PSI drift for quotes and claims; print JSON report to stdout; auto-starts shadow scoring if champion-challenger is triggered")
@@ -204,10 +205,19 @@ def main() -> None:
             return
 
     if args.compute_graph_features:
-        graph_features_df = compute_graph_features(CLAIMS_OUTPUT, os.environ["NEO4J_URI"], os.environ["NEO4J_USER"], os.environ["NEO4J_PASSWORD"])
+        import pandas as pd
+        # Auto-derive seed cutoff from data (80th-percentile loss date) so the BFS
+        # seed window always matches the temporal train/test split in train_xgb_fraud.
+        seed_cutoff = args.graph_seed_cutoff
+        if seed_cutoff is None:
+            _dates = pd.to_datetime(pd.read_parquet(CLAIMS_OUTPUT, columns=["loss_event_datetime"])["loss_event_datetime"])
+            if _dates.dt.tz is not None:
+                _dates = _dates.dt.tz_localize(None)
+            seed_cutoff = str(_dates.quantile(0.8).date())
+            print(f"Auto-derived graph seed cutoff: {seed_cutoff} (80th-percentile loss date)")
+        graph_features_df = compute_graph_features(CLAIMS_OUTPUT, os.environ["NEO4J_URI"], os.environ["NEO4J_USER"], os.environ["NEO4J_PASSWORD"], seed_cutoff_dt=seed_cutoff)
 
         # Merge with claims and update parquet
-        import pandas as pd
         claims_df = pd.read_parquet(CLAIMS_OUTPUT)
         claims_df = claims_df.drop(columns=['graph_hop_distance', 'attorney_centrality_score', 'shared_attribute_count'], errors='ignore')
         claims_df = claims_df.merge(graph_features_df, on='claim_id', how='left')

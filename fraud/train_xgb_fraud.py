@@ -65,7 +65,7 @@ def train(claims_path: Path, quotes_path: Path, output_dir: Path) -> dict:
     """
     df = pd.read_parquet(claims_path)
     df = _ensure_risk_score(df, quotes_path)
-    df = prepare_fraud_features(df).dropna(subset=[TARGET])
+    df = prepare_fraud_features(df).dropna(subset=[TARGET]).reset_index(drop=True)
 
     available_cols = [c for c in CLAIM_FRAUD_FEATURE_COLS if c in df.columns]
     X = df[available_cols]
@@ -74,9 +74,25 @@ def train(claims_path: Path, quotes_path: Path, output_dir: Path) -> dict:
     neg, pos = int((y == 0).sum()), int((y == 1).sum())
     scale_pos_weight = neg / pos
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, stratify=y, random_state=42
-    )
+    # Temporal split: train on earlier claims, evaluate on later ones.
+    # Prevents graph_hop_distance (seeded from fraud labels) from leaking into test metrics.
+    if "loss_event_datetime" in df.columns:
+        loss_dt = pd.to_datetime(df["loss_event_datetime"])
+        if loss_dt.dt.tz is not None:
+            loss_dt = loss_dt.dt.tz_localize(None)
+        cutoff = loss_dt.quantile(0.8)
+        train_mask = loss_dt < cutoff
+        train_idx = df.index[train_mask]
+        test_idx = df.index[~train_mask]
+        split_meta = {"split_type": "temporal", "train_test_cutoff_dt": str(cutoff.date())}
+    else:
+        train_idx, test_idx = train_test_split(
+            df.index, test_size=0.2, stratify=y, random_state=42
+        )
+        split_meta = {"split_type": "random_stratified"}
+
+    X_train, X_test = X.loc[train_idx], X.loc[test_idx]
+    y_train, y_test = y.loc[train_idx], y.loc[test_idx]
 
     model = xgb.XGBClassifier(
         objective="binary:logistic",
@@ -122,6 +138,7 @@ def train(claims_path: Path, quotes_path: Path, output_dir: Path) -> dict:
         "train_negatives": neg,
         "feature_importance_pct": feature_importance_pct,
         "available_feature_cols": available_cols,
+        **split_meta,
     }
     (output_dir / "fraud_metrics.json").write_text(json.dumps(metrics, indent=2))
     (output_dir / "fraud_features.json").write_text(json.dumps(available_cols, indent=2))
@@ -157,8 +174,20 @@ def train_with_pu_labels(
     y = df[TARGET].astype(int).values
     weights = df["sample_weight"].values
 
-    idx = np.arange(len(df))
-    train_idx, test_idx = train_test_split(idx, test_size=0.2, stratify=y, random_state=42)
+    if "loss_event_datetime" in df.columns:
+        loss_dt = pd.to_datetime(df["loss_event_datetime"])
+        if loss_dt.dt.tz is not None:
+            loss_dt = loss_dt.dt.tz_localize(None)
+        cutoff = loss_dt.quantile(0.8)
+        train_mask = (loss_dt < cutoff).values
+        train_idx = np.where(train_mask)[0]
+        test_idx = np.where(~train_mask)[0]
+        split_meta = {"split_type": "temporal", "train_test_cutoff_dt": str(cutoff.date())}
+    else:
+        train_idx, test_idx = train_test_split(
+            np.arange(len(df)), test_size=0.2, stratify=y, random_state=42
+        )
+        split_meta = {"split_type": "random_stratified"}
 
     X_train = X.iloc[train_idx]
     X_test = X.iloc[test_idx]
@@ -218,6 +247,7 @@ def train_with_pu_labels(
         "feature_importance_pct": feature_importance_pct,
         "available_feature_cols": available_cols,
         "pu_label_adjusted": True,
+        **split_meta,
     }
     (output_dir / "fraud_metrics_pu.json").write_text(json.dumps(metrics, indent=2))
     return metrics

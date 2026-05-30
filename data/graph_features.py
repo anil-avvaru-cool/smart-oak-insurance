@@ -100,13 +100,13 @@ def _compute_per_claim_attorney_centrality(session: Session) -> None:
     logger.info("Per-claim attorney centrality complete")
 
 
-def _compute_hop_distances(session: Session, max_hops: int) -> None:
+def _compute_hop_distances(session: Session, max_hops: int, seed_ids: list[str] | None = None) -> None:
     """
-    Multi-source BFS from all fraud seeds simultaneously.
+    Multi-source BFS from fraud seed claims simultaneously.
 
-    Seeds all fraud Claim nodes at distance 0, then expands one hop at a time
-    across the entire graph (Claim, Claimant, Entity, Attorney, Vehicle nodes).
-    O(V+E) total — replaces the O(F*C*(V+E)) Cartesian-product shortestPath.
+    Seeds fraud Claim nodes at distance 0 — either a caller-supplied subset
+    (temporal seeding to avoid label leakage) or all is_fraud=true claims.
+    Expands one hop at a time across the full graph. O(V+E) total.
     """
     logger.info(
         "Computing fraud hop distances (multi-source BFS, max_hops=%d)...", max_hops
@@ -115,14 +115,29 @@ def _compute_hop_distances(session: Session, max_hops: int) -> None:
     # Clean up any leftover tmp_hop from a previous interrupted run.
     session.run("MATCH (n) WHERE n.tmp_hop IS NOT NULL REMOVE n.tmp_hop")
 
-    seed_count = session.run(
-        """
-        MATCH (f:Claim {is_fraud: true})
-        SET f.tmp_hop = 0
-        RETURN count(f) AS cnt
-        """
-    ).single()["cnt"]
-    logger.info("BFS: seeded %d fraud claims at distance 0", seed_count)
+    if seed_ids is not None:
+        # Temporal seeding: only claims confirmed fraudulent before the cutoff date.
+        # Prevents graph_hop_distance=0 from leaking the is_fraud label for claims
+        # in the evaluation period.
+        seed_count = session.run(
+            """
+            MATCH (f:Claim)
+            WHERE f.id IN $ids
+            SET f.tmp_hop = 0
+            RETURN count(f) AS cnt
+            """,
+            ids=seed_ids,
+        ).single()["cnt"]
+        logger.info("BFS: seeded %d fraud claims (temporal subset) at distance 0", seed_count)
+    else:
+        seed_count = session.run(
+            """
+            MATCH (f:Claim {is_fraud: true})
+            SET f.tmp_hop = 0
+            RETURN count(f) AS cnt
+            """
+        ).single()["cnt"]
+        logger.info("BFS: seeded %d fraud claims at distance 0", seed_count)
 
     for hop in range(1, max_hops + 1):
         result = session.run(
@@ -152,6 +167,20 @@ def _compute_hop_distances(session: Session, max_hops: int) -> None:
     # Remove tmp_hop from all remaining non-Claim nodes.
     session.run("MATCH (n) WHERE n.tmp_hop IS NOT NULL REMOVE n.tmp_hop")
 
+    # Null out distance for seed claims: they were assigned 0 because they seeded the BFS,
+    # not because they are "0 hops from fraud" in a meaningful sense. Keeping 0 makes the
+    # feature a direct label encoding (distance=0 ↔ is_fraud=True) that XGBoost collapses onto.
+    if seed_ids is not None:
+        session.run(
+            f"MATCH (f:Claim) WHERE f.id IN $ids SET f.graph_hop_distance = {SENTINEL_HOP}",
+            ids=seed_ids,
+        )
+    else:
+        session.run(
+            f"MATCH (f:Claim {{is_fraud: true}}) SET f.graph_hop_distance = {SENTINEL_HOP}"
+        )
+    logger.info("Seed claim hop distances reset to sentinel (prevents label encoding)")
+
     logger.info("Hop distance flood-fill complete")
 
 
@@ -162,14 +191,31 @@ def compute_graph_features(
     neo4j_password: str,
     max_hops: int = DEFAULT_MAX_HOPS,
     batch_size: int = BATCH_SIZE,  # kept for API compatibility; no longer drives a loop
+    seed_cutoff_dt: str | None = None,
 ) -> pd.DataFrame:
 
     if not claims_path.exists():
         raise FileNotFoundError(
             f"Claims file not found: {claims_path}. Run --generate-data first."
         )
-    expected_count = len(pd.read_parquet(claims_path))
+    claims_raw = pd.read_parquet(claims_path)
+    expected_count = len(claims_raw)
     logger.info("Claims parquet: %d records to enrich", expected_count)
+
+    seed_ids: list[str] | None = None
+    if seed_cutoff_dt is not None:
+        cutoff = pd.Timestamp(seed_cutoff_dt)
+        loss_dt = pd.to_datetime(claims_raw["loss_event_datetime"])
+        if loss_dt.dt.tz is not None and cutoff.tz is None:
+            cutoff = cutoff.tz_localize("UTC")
+        mask = claims_raw["is_fraud"] & (loss_dt < cutoff)
+        seed_ids = claims_raw.loc[mask, "claim_id"].tolist()
+        logger.info(
+            "Temporal BFS seeding: %d fraud claims before %s (of %d total fraud)",
+            len(seed_ids),
+            seed_cutoff_dt,
+            int(claims_raw["is_fraud"].sum()),
+        )
 
     driver = GraphDatabase.driver(
         neo4j_uri,
@@ -205,8 +251,8 @@ def compute_graph_features(
         # 3. Per-claim attorney centrality: 1 query (reads Attorney.centrality set above)
         _compute_per_claim_attorney_centrality(session)
 
-        # 4. Hop distances: 1 flood-fill + 1 sentinel fill
-        _compute_hop_distances(session, max_hops)
+        # 4. Hop distances: seed from temporal subset if cutoff provided, else all fraud
+        _compute_hop_distances(session, max_hops, seed_ids=seed_ids)
 
         # 5. Read all enriched features back to Python
         total = session.run(
